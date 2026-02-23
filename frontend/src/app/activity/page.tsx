@@ -13,7 +13,6 @@ import {
   UserPlus,
   Building2,
   Loader2,
-  Check,
   Search,
   CalendarIcon,
   RefreshCw,
@@ -351,41 +350,6 @@ function AutocompleteInput({
           ))}
         </ul>
       )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Step indicator (processing steps)
-// ---------------------------------------------------------------------------
-
-function StepIndicator({
-  step,
-  active,
-  label,
-}: {
-  step: number;
-  active: boolean;
-  label: string;
-}) {
-  return (
-    <div className="flex flex-col items-center gap-1 shrink-0">
-      <div
-        className={cn(
-          'rounded-full w-7 h-7 flex items-center justify-center text-xs font-medium transition-colors',
-          active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-        )}
-      >
-        {active ? <Check className="h-4 w-4" /> : step}
-      </div>
-      <span
-        className={cn(
-          'text-xs transition-colors',
-          active ? 'text-foreground font-medium' : 'text-muted-foreground'
-        )}
-      >
-        {label}
-      </span>
     </div>
   );
 }
@@ -1298,6 +1262,16 @@ function ActivityPageContent(): React.ReactElement {
     setProcessingError(null);
     setProcessingStep('sent');
     setProcessingStep('extracting');
+    // Clear Date, Extracted Metadata, and AI-Generated Notes sections so they show blank + spinner until backend responds
+    setDueDate('');
+    setRecognisedDate({ date: null, label: null, confidence: 0 });
+    setRecommendedTouch(null);
+    setSubject('');
+    setQuestionsRaised('');
+    setUrgency('none');
+    setSubjectConfidence(0);
+    setQuestionsConfidence(0);
+    setDrafts({});
     try {
       const res = activityId
         ? await processActivityNotes(activityId, { note_text: noteContent })
@@ -1389,27 +1363,6 @@ function ActivityPageContent(): React.ReactElement {
                 {charCount.toLocaleString()} / {CHAR_LIMIT.toLocaleString()} characters
               </span>
             </div>
-            {processingStep !== 'idle' && (
-              <div className="flex items-center gap-4 py-1">
-                <StepIndicator
-                  step={1}
-                  active={['sent', 'extracting', 'ready'].includes(processingStep)}
-                  label="Sent"
-                />
-                <div className="flex-1 h-px min-w-2 bg-border" aria-hidden />
-                <StepIndicator
-                  step={2}
-                  active={['extracting', 'ready'].includes(processingStep)}
-                  label="Extracting"
-                />
-                <div className="flex-1 h-px min-w-2 bg-border" aria-hidden />
-                <StepIndicator
-                  step={3}
-                  active={processingStep === 'ready'}
-                  label="Ready"
-                />
-              </div>
-            )}
             {processingError && (
               <p className="text-sm text-status-at-risk">{processingError}</p>
             )}
@@ -1734,10 +1687,10 @@ function ActivityPageContent(): React.ReactElement {
             <CardTitle className="text-lg font-semibold">Dates</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {processingStep === 'extracting' ? (
-              <div className="space-y-4">
-                <Skeleton variant="text" className="h-4 w-20 mb-2" />
-                <Skeleton variant="rectangle" className="h-9 w-full max-w-[180px]" />
+            {(processingStep === 'sent' || processingStep === 'extracting') ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <span className="text-sm">Processing...</span>
               </div>
             ) : (
             <>
@@ -1847,24 +1800,10 @@ function ActivityPageContent(): React.ReactElement {
             <CardTitle className="text-lg font-semibold">Extracted Metadata - Upcoming Task</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {processingStep === 'extracting' ? (
-              <div className="space-y-4">
-                <div>
-                  <Skeleton variant="text" className="h-4 w-16 mb-2" />
-                  <Skeleton variant="rectangle" className="h-9 w-full" />
-                </div>
-                <div>
-                  <Skeleton variant="text" className="h-4 w-24 mb-2" />
-                  <Skeleton variant="rectangle" className="h-[4.5rem] w-full" />
-                </div>
-                <div>
-                  <Skeleton variant="text" className="h-4 w-24 mb-2" />
-                  <div className="flex gap-2 mt-1">
-                    <Skeleton variant="rectangle" className="h-9 w-16" />
-                    <Skeleton variant="rectangle" className="h-9 w-20" />
-                    <Skeleton variant="rectangle" className="h-9 w-16" />
-                  </div>
-                </div>
+            {(processingStep === 'sent' || processingStep === 'extracting') ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <span className="text-sm">Processing...</span>
               </div>
             ) : (
             <>
@@ -1915,11 +1854,10 @@ function ActivityPageContent(): React.ReactElement {
             <CardTitle className="text-lg font-semibold">AI-Generated Notes</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {processingStep === 'extracting' ? (
-              <div className="space-y-3">
-                {[1, 2, 3, 4].map((i) => (
-                  <Skeleton key={i} variant="rectangle" className="h-24 w-full rounded-md" />
-                ))}
+            {(processingStep === 'sent' || processingStep === 'extracting') ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <span className="text-sm">Processing...</span>
               </div>
             ) : (
               <>
