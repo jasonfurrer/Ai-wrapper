@@ -20,6 +20,7 @@ import {
   AlertTriangle,
   FileText,
   CalendarIcon,
+  Loader2,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Calendar } from '@/components/ui/calendar';
@@ -58,7 +59,6 @@ import {
   ContactPreview,
   type ContactPreviewContact,
 } from '@/components/shared/contact-preview';
-import { Skeleton } from '@/components/shared/skeleton';
 import { EmptyState } from '@/components/shared/empty-state';
 import { cn, stripHtml } from '@/lib/utils';
 import {
@@ -417,82 +417,6 @@ function getTodayDateString(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-
-// ---------------------------------------------------------------------------
-// Skeleton & Empty state
-// ---------------------------------------------------------------------------
-
-function ActivityCardSkeleton() {
-  return (
-    <Card>
-      <CardContent className="p-4 flex flex-col gap-3">
-        <Skeleton variant="text" className="h-4 w-3/4" />
-        <Skeleton variant="text" className="h-3 w-1/2" />
-        <Skeleton variant="text" className="h-3 w-full" />
-        <Skeleton variant="rectangle" className="h-10 w-full" />
-        <Skeleton variant="text" className="h-6 w-1/4" />
-      </CardContent>
-    </Card>
-  );
-}
-
-function CommunicationSummarySkeleton() {
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-3 gap-2">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="flex flex-col items-center rounded-md border border-border bg-muted/30 p-3">
-            <Skeleton variant="circle" className="h-4 w-4 mb-1" />
-            <Skeleton variant="text" className="h-6 w-8 mb-1" />
-            <Skeleton variant="text" className="h-3 w-12" />
-          </div>
-        ))}
-      </div>
-      <div className="space-y-2">
-        <Skeleton variant="text" className="h-4 w-full" />
-        <Skeleton variant="text" className="h-4 w-4/5" />
-      </div>
-      <div>
-        <Skeleton variant="text" className="h-4 w-24 mb-2" />
-        <ul className="space-y-2">
-          {[1, 2, 3, 4].map((i) => (
-            <li key={i}>
-              <Skeleton variant="text" className="h-3 w-full" />
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-function ContactPreviewSkeleton() {
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader className="pb-3">
-        <Skeleton variant="text" className="h-6 w-2/3" />
-      </CardHeader>
-      <CardContent className="flex flex-col gap-6 pt-0">
-        <div className="flex flex-col gap-2">
-          <Skeleton variant="text" className="h-4 w-40" />
-          <Skeleton variant="text" className="h-4 w-48" />
-        </div>
-        <section className="flex flex-col gap-3">
-          <Skeleton variant="text" className="h-4 w-28" />
-          <div className="space-y-4">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="flex flex-col gap-1">
-                <Skeleton variant="text" className="h-3 w-16" />
-                <Skeleton variant="text" className="h-4 w-full" />
-              </div>
-            ))}
-          </div>
-        </section>
-      </CardContent>
-    </Card>
-  );
-}
-
 
 // ---------------------------------------------------------------------------
 // Page
@@ -1273,11 +1197,10 @@ export default function DashboardPage(): React.ReactElement {
           </p>
           <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-2">
             {isLoading ? (
-              <>
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <ActivityCardSkeleton key={i} />
-                ))}
-              </>
+              <div className="flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground min-h-[200px]">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <span className="text-sm">Loading...</span>
+              </div>
             ) : searchFilteredItems.length === 0 ? (
               <Card className="border-dashed">
                 <CardContent className="p-0">
@@ -1336,7 +1259,10 @@ export default function DashboardPage(): React.ReactElement {
             </CardHeader>
             <CardContent className="flex flex-col gap-4 flex-1 min-h-0 overflow-y-auto">
               {isLoading ? (
-                <CommunicationSummarySkeleton />
+                <div className="flex flex-col items-center justify-center flex-1 py-12 gap-3 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                  <span className="text-sm">Loading...</span>
+                </div>
               ) : selectedItem ? (
                 <div className="rounded-md border border-border bg-muted/30 p-3 min-h-0 overflow-y-auto">
                   <p className="text-sm text-foreground whitespace-pre-wrap">
@@ -1356,21 +1282,24 @@ export default function DashboardPage(): React.ReactElement {
 
         {/* Right panel - Contact preview (full width on tablet below the 2 cols, 3 cols on desktop), fixed; scrolls internally if needed */}
         <section className="flex flex-col min-h-0 md:col-span-2 lg:col-span-3 lg:flex-shrink-0 lg:overflow-hidden rounded-lg bg-section border border-border p-4">
-          {isLoading ? (
-            <ContactPreviewSkeleton />
-          ) : (
-            <Card className="h-full min-h-0 overflow-hidden flex flex-col bg-card">
-              <CardHeader className="pb-3 shrink-0">
-                <h2 className="text-lg font-semibold flex items-center gap-2">
-                  <User className="h-4 w-4 text-muted-foreground" />
-                  Contact Preview
-                </h2>
-              </CardHeader>
+          <Card className="h-full min-h-0 overflow-hidden flex flex-col bg-card">
+            <CardHeader className="pb-3 shrink-0">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <User className="h-4 w-4 text-muted-foreground" />
+                Contact Preview
+              </h2>
+            </CardHeader>
+            {isLoading ? (
+              <CardContent className="flex-1 min-h-0 flex flex-col items-center justify-center py-12 gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <span className="text-sm">Loading...</span>
+              </CardContent>
+            ) : (
               <CardContent className="flex-1 min-h-0 overflow-y-auto">
                 <ContactPreview contact={selectedContact} />
               </CardContent>
-            </Card>
-          )}
+            )}
+          </Card>
         </section>
       </div>
 
