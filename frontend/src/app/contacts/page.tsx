@@ -493,7 +493,7 @@ function ContactSearchPanel(): React.ReactElement {
   };
 
   return (
-    <div className="space-y-3 p-3 border-b border-border">
+    <div className="space-y-3 p-3 border-b border-border shrink-0">
       {/* Search bar */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden />
@@ -507,13 +507,13 @@ function ContactSearchPanel(): React.ReactElement {
         />
       </div>
 
-      {/* Results */}
+      {/* Results — fixed-height scrollable area so the list never pushes the email section off-screen */}
       {contactError && (
         <p className="text-sm text-status-at-risk" role="alert">{contactError}</p>
       )}
       {debouncedSearch.trim() ? (
         isSearching && contacts.length === 0 ? (
-          <div className="flex items-center justify-center py-8" aria-busy="true">
+          <div className="flex items-center justify-center py-8 min-h-[200px]" aria-busy="true">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-hidden />
           </div>
         ) : contacts.length === 0 ? (
@@ -523,34 +523,36 @@ function ContactSearchPanel(): React.ReactElement {
             </CardContent>
           </Card>
         ) : (
-          <Card>
-            <CardHeader className="py-2.5">
+          <Card className="flex flex-col shrink-0">
+            <CardHeader className="py-2.5 shrink-0">
               <CardTitle className="text-base">Results</CardTitle>
               <p className="text-xs text-muted-foreground mt-0.5">Click the info button to view, edit, or delete.</p>
             </CardHeader>
             <CardContent className="p-0">
-              <ul className="divide-y divide-border border-t border-border">
-                {contacts.map((c) => (
-                  <li key={c.id} className="flex items-center justify-between gap-4 py-2 px-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium truncate">
-                        {[c.first_name, c.last_name].filter(Boolean).join(' ') || 'Unnamed'}
-                      </p>
-                      <p className="text-sm text-muted-foreground truncate">{c.email ?? '—'}</p>
-                      {c.company_name && (
-                        <p className="text-xs text-muted-foreground truncate mt-0.5">{c.company_name}</p>
-                      )}
-                    </div>
-                    <Button
-                      type="button" variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0"
-                      onClick={() => openInfoDialog(c)}
-                      aria-label={`View details for ${c.first_name ?? ''} ${c.last_name ?? ''}`}
-                    >
-                      <Info className="h-4 w-4" />
-                    </Button>
-                  </li>
-                ))}
-              </ul>
+              <div className="max-h-72 overflow-y-auto border-t border-border [scrollbar-gutter:stable]" aria-label="Contact search results">
+                <ul className="divide-y divide-border">
+                  {contacts.map((c) => (
+                    <li key={c.id} className="flex items-center justify-between gap-4 py-2 px-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium truncate">
+                          {[c.first_name, c.last_name].filter(Boolean).join(' ') || 'Unnamed'}
+                        </p>
+                        <p className="text-sm text-muted-foreground truncate">{c.email ?? '—'}</p>
+                        {c.company_name && (
+                          <p className="text-xs text-muted-foreground truncate mt-0.5">{c.company_name}</p>
+                        )}
+                      </div>
+                      <Button
+                        type="button" variant="ghost" size="sm" className="h-8 w-8 p-0 shrink-0"
+                        onClick={() => openInfoDialog(c)}
+                        aria-label={`View details for ${c.first_name ?? ''} ${c.last_name ?? ''}`}
+                      >
+                        <Info className="h-4 w-4" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </CardContent>
           </Card>
         )
@@ -1615,11 +1617,13 @@ function ContactsPageContent(): React.ReactElement {
           </Tabs>
         </div>
 
-        {/* Right column (50%): contact search + import from communication; scrolls independently */}
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden bg-surface">
-          <ContactSearchPanel />
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <ImportFromCommunicationColumn onUseExtractedData={handleUseExtractedDataFromImport} />
+        {/* Right column (50%): contact search + import from communication; whole column scrolls, page stays static */}
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-y-auto bg-surface [scrollbar-gutter:stable]">
+          <div className="flex flex-col min-h-min">
+            <ContactSearchPanel />
+            <div className="min-h-[420px] flex flex-col">
+              <ImportFromCommunicationColumn onUseExtractedData={handleUseExtractedDataFromImport} />
+            </div>
           </div>
         </div>
 
