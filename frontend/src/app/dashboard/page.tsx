@@ -556,6 +556,7 @@ export default function DashboardPage(): React.ReactElement {
     datePickerValue,
   };
   const loadedFromStorageRef = React.useRef(false);
+  const isSigningOutRef = React.useRef(false);
 
   const showToast = React.useCallback(
     (variant: ToastState['variant'], title: string, description?: string) => {
@@ -593,10 +594,12 @@ export default function DashboardPage(): React.ReactElement {
     if (state.selected_activity_id) setSelectedActivityId(state.selected_activity_id);
   }, [dashboardStateQuery.data]);
 
-  // On unmount: persist current state immediately so server has it for other tabs/device
+  // On unmount: persist current state immediately so server has it for other tabs/device.
+  // Skip persist when user signed out from this page so clearDashboardState() is not overwritten.
   React.useEffect(() => {
     return () => {
       if (!user) return;
+      if (isSigningOutRef.current) return;
       const s = latestStateRef.current;
       const state = {
         selected_activity_id: s.selectedActivityId ?? null,
@@ -990,6 +993,7 @@ export default function DashboardPage(): React.ReactElement {
                 className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10 py-2.5"
                 onSelect={(e) => {
                   e.preventDefault();
+                  isSigningOutRef.current = true;
                   queryClient.removeQueries({ queryKey: [DASHBOARD_STATE_QUERY_KEY] });
                   signOut();
                 }}
