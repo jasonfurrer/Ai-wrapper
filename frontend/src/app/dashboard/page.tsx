@@ -78,8 +78,10 @@ import {
   getDashboardState,
   updateDashboardState,
   debouncedUpdateDashboardState,
+  cancelDebouncedDashboardState,
   DebounceCancelledError,
 } from '@/lib/api/dashboard';
+import type { DashboardState } from '@/lib/api/types';
 import { useAuth } from '@/contexts/AuthContext';
 
 // ---------------------------------------------------------------------------
@@ -419,34 +421,51 @@ const ACTIVITIES_QUERY_KEY = 'activities';
 const DASHBOARD_STATE_QUERY_KEY = 'dashboardState';
 const DASHBOARD_STATE_STORAGE_KEY = 'dashboardState';
 
-function getInitialDashboardStateFromStorage(): {
+const DASHBOARD_STATE_STALE_MS = 5 * 60 * 1000; // 5 min – refetch when returning after a while
+
+/** Build initial UI state from React Query cache or defaults (no sessionStorage). Instant on navigate back. */
+function stateFromCacheOrDefaults(cached: DashboardState | undefined): {
   filter: FilterState;
   sort: SortOption;
   datePickerValue: string;
   selectedActivityId: string | null;
-} | null {
-  return loadDashboardStateFromStorage();
+} {
+  if (!cached) {
+    return {
+      filter: DEFAULT_FILTER,
+      sort: 'date_newest',
+      datePickerValue: getTodayDateString(),
+      selectedActivityId: null,
+    };
+  }
+  const filter = filterStateFromApi(cached.filter_state as Record<string, unknown>);
+  const hasDateRange = !!(filter.dateFrom || filter.dateTo);
+  const datePickerValue = hasDateRange ? '' : (cached.date_picker_value ?? getTodayDateString());
+  return {
+    filter,
+    sort: (cached.sort_option as SortOption) || 'date_newest',
+    datePickerValue,
+    selectedActivityId: typeof cached.selected_activity_id === 'string' ? cached.selected_activity_id : null,
+  };
 }
 
 export default function DashboardPage(): React.ReactElement {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { user, isSigningOutRef } = useAuth() as { user: { email?: string; user_metadata?: { full_name?: string } } | null; isSigningOutRef: React.MutableRefObject<boolean> };
-  const stored = React.useMemo(() => getInitialDashboardStateFromStorage(), []);
+  // Initial state from React Query cache (instant on navigate back) or defaults – no sessionStorage
+  const initial = React.useMemo(
+    () => stateFromCacheOrDefaults(queryClient.getQueryData([DASHBOARD_STATE_QUERY_KEY])),
+    [queryClient]
+  );
   const [selectedActivityId, setSelectedActivityId] = React.useState<string | null>(
-    () => stored?.selectedActivityId ?? null
+    () => initial.selectedActivityId
   );
-  const [sort, setSort] = React.useState<SortOption>(() => stored?.sort ?? 'date_newest');
+  const [sort, setSort] = React.useState<SortOption>(() => initial.sort);
   const [filterDialogOpen, setFilterDialogOpen] = React.useState(false);
-  const [filterDraft, setFilterDraft] = React.useState<FilterState>(
-    () => stored?.filter ?? DEFAULT_FILTER
-  );
-  const [filterApplied, setFilterApplied] = React.useState<FilterState>(
-    () => stored?.filter ?? DEFAULT_FILTER
-  );
-  const [datePickerValue, setDatePickerValue] = React.useState<string>(
-    () => stored?.datePickerValue ?? getTodayDateString()
-  );
+  const [filterDraft, setFilterDraft] = React.useState<FilterState>(() => initial.filter);
+  const [filterApplied, setFilterApplied] = React.useState<FilterState>(() => initial.filter);
+  const [datePickerValue, setDatePickerValue] = React.useState<string>(() => initial.datePickerValue);
   const [activitySearchQuery, setActivitySearchQuery] = React.useState('');
   const [completingId, setCompletingId] = React.useState<string | null>(null);
   const [completeConfirmActivity, setCompleteConfirmActivity] = React.useState<ActivityCardActivity | null>(null);
@@ -472,7 +491,9 @@ export default function DashboardPage(): React.ReactElement {
     filterApplied,
     datePickerValue,
   };
-  const loadedFromStorageRef = React.useRef(false);
+  const hasUserInteractedRef = React.useRef(false);
+  const weJustAppliedServerStateRef = React.useRef(false);
+  const isUnmountingRef = React.useRef(false);
 
   const showToast = React.useCallback(
     (variant: ToastState['variant'], title: string, description?: string) => {
@@ -487,20 +508,14 @@ export default function DashboardPage(): React.ReactElement {
     queryFn: getDashboardState,
     enabled: !!user,
     retry: false,
+    staleTime: DASHBOARD_STATE_STALE_MS,
   });
 
-  // On mount: mark that we restored from sessionStorage (state already initialized from it) so API sync doesn't overwrite
-  React.useEffect(() => {
-    const stored = loadDashboardStateFromStorage();
-    if (stored) loadedFromStorageRef.current = true;
-  }, []);
-
-  // Sync local UI state from server/cache when dashboard state is available (only if we didn't load from sessionStorage).
-  // Backend returns today's date when no saved state (first load after sign-in), so we use state as-is.
+  // Sync local UI state from server/cache when available, only if user hasn't interacted yet.
   React.useEffect(() => {
     const state = dashboardStateQuery.data;
-    if (!state || loadedFromStorageRef.current) return;
-    loadedFromStorageRef.current = true;
+    if (!state || hasUserInteractedRef.current) return;
+    weJustAppliedServerStateRef.current = true;
     setSort((state.sort_option as SortOption) || 'date_newest');
     const filter = filterStateFromApi(state.filter_state as Record<string, unknown>);
     setFilterApplied(filter);
@@ -510,12 +525,12 @@ export default function DashboardPage(): React.ReactElement {
     if (state.selected_activity_id) setSelectedActivityId(state.selected_activity_id);
   }, [dashboardStateQuery.data]);
 
-  // On unmount: persist current state immediately so server has it for other tabs/device.
-  // Skip persist when user signed out from this page so clearDashboardState() is not overwritten.
+  // On unmount: cancel debounced save, write latest state to cache immediately (so next mount shows it), then flush to server.
   React.useEffect(() => {
     return () => {
-      if (!user) return;
-      if (isSigningOutRef.current) return;
+      if (!user || isSigningOutRef.current) return;
+      isUnmountingRef.current = true;
+      cancelDebouncedDashboardState();
       const s = latestStateRef.current;
       const state = {
         selected_activity_id: s.selectedActivityId ?? null,
@@ -523,6 +538,8 @@ export default function DashboardPage(): React.ReactElement {
         filter_state: filterStateToApi(s.filterApplied),
         date_picker_value: s.datePickerValue || null,
       };
+      // Update cache synchronously so when user navigates back they see the latest (e.g. date 11), not stale data.
+      queryClient.setQueryData([DASHBOARD_STATE_QUERY_KEY], { ...state, updated_at: null });
       updateDashboardState(state)
         .then((result) => {
           queryClient.setQueryData([DASHBOARD_STATE_QUERY_KEY], result);
@@ -555,7 +572,7 @@ export default function DashboardPage(): React.ReactElement {
   const activitiesQuery = useQuery({
     queryKey: [ACTIVITIES_QUERY_KEY, activitiesParams],
     queryFn: () => getActivities(activitiesParams),
-    enabled: !!user && dashboardStateQuery.isFetched,
+    enabled: !!user,
   });
 
   // Derive list and completed set from query data (so UI shows cached data when returning)
@@ -602,8 +619,11 @@ export default function DashboardPage(): React.ReactElement {
     }
   }, [dashboardStateQuery.isError, dashboardStateQuery.error, dashboardStateQuery.data, showToast]);
 
-  // Persist dashboard state: always write to sessionStorage (so date/filters survive navigation), debounce API save.
+  // Persist dashboard state: sessionStorage backup, debounced API save. Mark user interacted when persisting (not on initial load or right after server sync).
   React.useEffect(() => {
+    if (user && !isInitialLoad && !weJustAppliedServerStateRef.current) hasUserInteractedRef.current = true;
+    weJustAppliedServerStateRef.current = false;
+
     const state = {
       selected_activity_id: selectedActivityId ?? null,
       sort_option: sort,
@@ -614,7 +634,7 @@ export default function DashboardPage(): React.ReactElement {
     if (!user || isInitialLoad) return;
     debouncedUpdateDashboardState(state)
       .then((result) => {
-        queryClient.setQueryData([DASHBOARD_STATE_QUERY_KEY], result);
+        if (!isUnmountingRef.current) queryClient.setQueryData([DASHBOARD_STATE_QUERY_KEY], result);
       })
       .catch((err) => {
         if (err instanceof DebounceCancelledError) return;

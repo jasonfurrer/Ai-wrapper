@@ -167,10 +167,12 @@ export class DebounceCancelledError extends Error {
  * Debounced wrapper: calls updateDashboardState after 500ms of no further invocations.
  * Each call resets the timer. Returns a promise that resolves with the update result
  * when the request runs, or rejects with DebounceCancelledError if a newer call reset the timer.
+ * cancel() clears any pending debounce (use on unmount to avoid races).
  */
-function createDebouncedUpdate(): (
-  state: Partial<DashboardState>
-) => Promise<DashboardState> {
+function createDebouncedUpdate(): {
+  update: (state: Partial<DashboardState>) => Promise<DashboardState>;
+  cancel: () => void;
+} {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let resolveLast: ((value: DashboardState) => void) | null = null;
   let rejectLast: ((reason: unknown) => void) | null = null;
@@ -192,7 +194,18 @@ function createDebouncedUpdate(): (
     rejectLast = null;
   };
 
-  return (state: Partial<DashboardState>): Promise<DashboardState> => {
+  const cancel = () => {
+    if (timeoutId != null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+      if (rejectLast) rejectLast(new DebounceCancelledError());
+      rejectLast = null;
+      resolveLast = null;
+      pendingState = {};
+    }
+  };
+
+  const update = (state: Partial<DashboardState>): Promise<DashboardState> => {
     if (timeoutId != null) {
       clearTimeout(timeoutId);
       if (rejectLast) rejectLast(new DebounceCancelledError());
@@ -204,6 +217,10 @@ function createDebouncedUpdate(): (
       timeoutId = setTimeout(flush, DEBOUNCE_MS);
     });
   };
+
+  return { update, cancel };
 }
 
-export const debouncedUpdateDashboardState = createDebouncedUpdate();
+const debounced = createDebouncedUpdate();
+export const debouncedUpdateDashboardState = debounced.update;
+export const cancelDebouncedDashboardState = debounced.cancel;

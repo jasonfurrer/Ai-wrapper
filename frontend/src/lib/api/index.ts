@@ -31,6 +31,7 @@ export {
   updateDashboardState,
   clearDashboardState,
   debouncedUpdateDashboardState,
+  cancelDebouncedDashboardState,
   DebounceCancelledError,
 } from './dashboard';
 

@@ -18,13 +18,13 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="font-sans antialiased">
-        <AuthProvider>
-          <Providers>
+        <Providers>
+          <AuthProvider>
             <ToastWrapper>
               <AppShell>{children}</AppShell>
             </ToastWrapper>
-          </Providers>
-        </AuthProvider>
+          </AuthProvider>
+        </Providers>
       </body>
     </html>
   );

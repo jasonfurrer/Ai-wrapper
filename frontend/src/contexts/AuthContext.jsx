@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { clearDashboardState } from '@/lib/api'
 
@@ -20,6 +21,7 @@ export const AuthProvider = ({ children }) => {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+  const queryClient = useQueryClient()
   const isSigningOutRef = useRef(false)
 
   useEffect(() => {
@@ -83,6 +85,9 @@ export const AuthProvider = ({ children }) => {
       try {
         sessionStorage.removeItem('dashboardState')
       } catch (_) {}
+      // Clear React Query cache so next user never sees previous user's dashboard/activities
+      queryClient.removeQueries({ queryKey: ['dashboardState'] })
+      queryClient.removeQueries({ queryKey: ['activities'] })
       await supabase.auth.signOut()
       router.push('/login')
     } catch (error) {
