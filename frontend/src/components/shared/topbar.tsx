@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { SETTINGS_PAGE_ENABLED } from '@/lib/features';
 
 function getInitials(name: string | null | undefined): string {
   if (!name?.trim()) return '?';
@@ -111,18 +112,22 @@ const Topbar = React.forwardRef<HTMLElement, TopbarProps>(
               </div>
             )}
             {(user?.name || user?.email) && <DropdownMenuSeparator />}
-            <DropdownMenuItem asChild>
-              <Link href="/settings" className="flex cursor-pointer items-center gap-2">
-                <User className="h-4 w-4" />
-                Profile
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/settings" className="flex cursor-pointer items-center gap-2">
-                <Settings className="h-4 w-4" />
-                Settings
-              </Link>
-            </DropdownMenuItem>
+            {SETTINGS_PAGE_ENABLED && (
+              <>
+                <DropdownMenuItem asChild>
+                  <Link href="/settings" className="flex cursor-pointer items-center gap-2">
+                    <User className="h-4 w-4" />
+                    Profile
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/settings" className="flex cursor-pointer items-center gap-2">
+                    <Settings className="h-4 w-4" />
+                    Settings
+                  </Link>
+                </DropdownMenuItem>
+              </>
+            )}
             <DropdownMenuItem
               className="flex cursor-pointer items-center gap-2 text-status-at-risk focus:text-status-at-risk"
               onSelect={(e) => {

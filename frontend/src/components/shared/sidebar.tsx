@@ -18,14 +18,19 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { SETTINGS_PAGE_ENABLED } from '@/lib/features';
 
-const NAV_ITEMS: { path: string; label: string; icon: LucideIcon }[] = [
+const ALL_NAV_ITEMS: { path: string; label: string; icon: LucideIcon }[] = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/activity', label: 'Activity', icon: FileText },
   { path: '/contacts', label: 'Contacts', icon: Users },
   { path: '/integrations', label: 'Integrations', icon: Plug },
   { path: '/settings', label: 'Settings', icon: Settings },
 ];
+
+const NAV_ITEMS = SETTINGS_PAGE_ENABLED
+  ? ALL_NAV_ITEMS
+  : ALL_NAV_ITEMS.filter((item) => item.path !== '/settings');
 
 export interface SidebarProps extends React.HTMLAttributes<HTMLElement> {
   className?: string;
