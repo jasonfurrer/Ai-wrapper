@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { clearDashboardState } from '@/lib/api'
@@ -20,6 +20,7 @@ export const AuthProvider = ({ children }) => {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+  const isSigningOutRef = useRef(false)
 
   useEffect(() => {
     // Get initial session
@@ -75,6 +76,7 @@ export const AuthProvider = ({ children }) => {
   }
 
   const signOut = async () => {
+    isSigningOutRef.current = true
     try {
       // Clear dashboard state (server + sessionStorage) so next sign-in shows today's tasks
       await clearDashboardState().catch(() => {})
@@ -123,6 +125,7 @@ export const AuthProvider = ({ children }) => {
     signOut,
     resetPassword,
     updatePassword,
+    isSigningOutRef,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -13,7 +13,6 @@ import {
   Search,
   SearchX,
   User,
-  LogOut,
   RefreshCw,
   Clock,
   WifiOff,
@@ -67,12 +66,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getActivities,
@@ -438,7 +431,7 @@ function getInitialDashboardStateFromStorage(): {
 export default function DashboardPage(): React.ReactElement {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { user, signOut } = useAuth() as { user: { email?: string; user_metadata?: { full_name?: string } } | null; signOut: () => Promise<void> };
+  const { user, isSigningOutRef } = useAuth() as { user: { email?: string; user_metadata?: { full_name?: string } } | null; isSigningOutRef: React.MutableRefObject<boolean> };
   const stored = React.useMemo(() => getInitialDashboardStateFromStorage(), []);
   const [selectedActivityId, setSelectedActivityId] = React.useState<string | null>(
     () => stored?.selectedActivityId ?? null
@@ -480,7 +473,6 @@ export default function DashboardPage(): React.ReactElement {
     datePickerValue,
   };
   const loadedFromStorageRef = React.useRef(false);
-  const isSigningOutRef = React.useRef(false);
 
   const showToast = React.useCallback(
     (variant: ToastState['variant'], title: string, description?: string) => {
@@ -890,43 +882,6 @@ export default function DashboardPage(): React.ReactElement {
               </span>
             )}
           </div>
-        </div>
-        {/* Profile menu */}
-        <div className="flex items-center justify-end shrink-0 self-start sm:self-center">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-10 w-10 rounded-full border-2 border-muted-foreground/70 bg-muted/50 hover:bg-muted hover:border-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                aria-label="Open profile menu"
-              >
-                <User className="h-5 w-5 text-muted-foreground" aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" sideOffset={8} className="w-64 p-0">
-              <div className="px-3 py-3 border-b border-border">
-                <p className="text-sm font-medium text-foreground truncate">
-                  {user?.user_metadata?.full_name ?? 'User'}
-                </p>
-                <p className="text-xs text-muted-foreground truncate mt-0.5">
-                  {user?.email ?? ''}
-                </p>
-              </div>
-              <DropdownMenuItem
-                className="cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10 py-2.5"
-                onSelect={(e) => {
-                  e.preventDefault();
-                  isSigningOutRef.current = true;
-                  queryClient.removeQueries({ queryKey: [DASHBOARD_STATE_QUERY_KEY] });
-                  signOut();
-                }}
-              >
-                <LogOut className="mr-2 h-4 w-4" />
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
       </header>
 
