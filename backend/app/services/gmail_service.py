@@ -118,13 +118,23 @@ async def get_gmail_client(user_id: str, supabase: SupabaseService):
                     last_connected_dt = datetime.fromisoformat(str(existing_connected_at).replace("Z", "+00:00"))
                 except Exception:
                     pass
+            email_to_save = (row.get("email") or "").strip() or None
+            if not email_to_save:
+                try:
+                    temp_service = build("gmail", "v1", credentials=creds)
+                    profile = temp_service.users().getProfile(userId="me").execute()
+                    email_to_save = (profile.get("emailAddress") or "").strip() or None
+                    if email_to_save:
+                        logger.info("Backfilled Gmail email for user %s (on token refresh)", user_id)
+                except Exception as e:
+                    logger.debug("Could not fetch Gmail profile for email backfill: %s", e)
             await supabase.upsert_gmail_tokens(
                 user_id=user_id,
                 access_token=creds.token or "",
                 refresh_token=creds.refresh_token,
                 token_expiry=token_expiry_for_db,
                 last_connected_at=last_connected_dt,
-                email=row.get("email"),
+                email=email_to_save or row.get("email"),
             )
         except Exception as e:
             logger.error("Gmail token refresh failed for user %s: %s", user_id, e)

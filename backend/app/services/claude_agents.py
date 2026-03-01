@@ -621,7 +621,7 @@ def extract_contact_from_email(
         user_email_instruction = (
             f"\n**Current user's email (the person using this tool):** {user_email.strip()}\n"
             "The CONTACT to extract is always the *other* party, not the user. Never extract the user's name, email, company, or phone as the contact.\n"
-            "- **If the email was SENT by the user** (From matches the user's email): the contact is the RECIPIENT. Use the To field for contact email (extract the address only, e.g. from 'Name <a@b.com>' use 'a@b.com'). When there are multiple recipients in To, the contact is the **primary (first) recipient**—use the first address in To that is not the user. For name and other fields, use the To header display name and any signature or body content that clearly refers to that recipient.\n"
+            "- **If the email was SENT by the user** (From matches the user's email): the contact is the RECIPIENT. Use the To field for contact email (extract the address only, e.g. from 'Name <a@b.com>' use 'a@b.com'). When there are multiple recipients in To, the contact is the **primary (first) recipient**—use the first address in To that is not the user. For name and other fields, use the To header display name and the part of the body that directly addresses the recipient (e.g. salutation). Do **not** use names, titles, or company from quoted replies or forwarded sections (e.g. \"On ... wrote:\", \"---------- Forwarded message ---------\").\n"
             "- **If the email was RECEIVED by the user** (To contains the user's email): the contact is the SENDER. Use the From field for contact email (extract the address only). For name and other fields, use the From header display name and the **sender's email signature** (see Email signatures below) as the primary source; then body/salutation if needed.\n"
         )
     else:
@@ -633,29 +633,31 @@ def extract_contact_from_email(
 
 **Rules**
 1. Extract the MAIN contact (one person) and their organization. The contact is the person we want to add to the CRM.
-2. For every field, extract the most specific value you can find. Use empty string "" only when you truly cannot determine a value.
-3. Output ONLY valid JSON in the exact format below. Do not wrap the JSON in markdown code fences. No explanation, no other text.
-4. When there are multiple recipients (To), the contact is the **primary recipient**: the first address in To that is not the user. Use that party's display name and any signature or body content that refers to them.
-5. **Do not** extract the current user's name, email, company, or phone as the contact. Do not infer company_name or company_domain from the contact's personal email domain (e.g. @gmail.com, @yahoo.com)—leave company fields empty unless the body or signature states a company.
+2. Use only the From and To headers to determine the contact. Ignore CC and BCC.
+3. For every field, extract the most specific value you can find. Use empty string "" only when you truly cannot determine a value.
+4. Output ONLY valid JSON in the exact format below. Do not wrap the JSON in markdown code fences. No explanation, no other text. No trailing commas, no comments, no newlines inside string values; escape double quotes inside strings.
+5. When there are multiple recipients (To), the contact is the **primary recipient**: the first address in To that is not the user. Use that party's display name and any signature or body content that refers to them (but for sent mail, do not use quoted/forwarded sections—see Email signatures).
+6. If To contains only the user (e.g. self-sent or draft), leave contact fields empty unless one other party is clearly identifiable from the body.
+7. **Do not** extract the current user's name, email, company, or phone as the contact. Do not infer company_name or company_domain from the contact's personal email domain (e.g. @gmail.com, @yahoo.com)—leave company fields empty unless the body or signature states a company.
 """ + user_email_instruction + """
 **Email signatures**
-Professional email signatures often appear at the end of the message (after sign-offs like "Best regards", "Cheers", "Thanks", "Kind regards", or "---") and contain detailed contact information. When the contact is the **sender** (received mail), treat the sender's signature as the **primary source** for: name, job title, company name, phone, city/state, and company domain. Common signature patterns include: "Name | Job Title | Company", block format (name on one line, title below, company below, phone/address), and lines with "M:" or "T:" for mobile/phone. Ignore legal disclaimers, confidentiality notices, and social/media links for extraction. When the contact is the **recipient** (sent mail), use the To header and any quoted reply or signature in the body that clearly refers to that recipient; otherwise rely on To display name and body context.
+Professional email signatures often appear at the end of the message (after sign-offs like "Best regards", "Cheers", "Thanks", "Kind regards", or "---") and contain detailed contact information. When the contact is the **sender** (received mail), treat the sender's signature as the **primary source** for: name, job title, company name, phone, city/state, and company domain. Common signature patterns include: "Name | Job Title | Company", block format (name on one line, title below, company below, phone/address), and lines with "M:" or "T:" for mobile/phone. Ignore legal disclaimers, confidentiality notices, and social/media links for extraction. When the contact is the **recipient** (sent mail), use the To header and the part of the body that directly addresses the recipient (e.g. salutation); do **not** use names, titles, or company from quoted replies or forwarded sections (e.g. "On ... wrote:", "---------- Forwarded message ---------"). If no clear recipient info beyond To, rely on To display name only.
 
 **Field definitions**
-- **first_name, last_name:** The contact's given name and family name. For received mail the contact is the sender—use From display name and the sender's signature/body. For sent mail the contact is the recipient—use To display name and any signature/body referring to them. Never use the user's name. Split correctly; if only one name is given, put it in first_name and leave last_name "".
+- **first_name, last_name:** The contact's given name and family name. For received mail the contact is the sender—use From display name and the sender's signature/body. For sent mail the contact is the recipient—use To display name and body that refers to them (not quoted/forwarded). Never use the user's name. If only one name is given (e.g. "John" or "John Smith"), put it in first_name and leave last_name "". If the format is "Last, First", use First as first_name and Last as last_name.
 - **email:** The contact's email address only (e.g. "john@company.com"). If the user sent the email, contact email = first non-user address in To; if the user received it, contact email = From. Extract just the address from formats like "Name <email@domain.com>".
-- **phone:** Phone number clearly associated with the contact. Prefer E.164 when a country code is present (e.g. +1 555 123 4567); otherwise digits only. Signatures often include "M:", "T:", "Tel:", or "Mobile:". Use "" if none found.
+- **phone:** Phone number clearly associated with the contact. Prefer E.164 when a country code is present (e.g. +1 555 123 4567); otherwise digits only. Signatures often include "M:", "T:", "Tel:", or "Mobile:". If multiple numbers appear for the contact, prefer one (e.g. mobile or the first in the signature). Use "" if none found or ambiguous.
 - **job_title:** Job title if stated (e.g. "VP of Sales"). Signatures frequently include title; prefer signature over body when both exist. Otherwise "".
 - **company_name:** The company or organization the contact works for. Look in the contact's signature first, then: "company X", "at X", "X Inc", "X Corp", "X Ltd", or the most prominent organization name in the body. Capitalize properly. Do not infer from personal email domains (gmail, yahoo, etc.); leave "" unless stated.
 - **company_domain:** The most likely official website domain for that company. Infer from company name (e.g. "Acme Corp" → "acme.com"). Use lowercase, no "www". Leave "" if company_name is unknown or the contact uses a consumer email domain.
 - **city, state_region:** Location if mentioned (signature or body); otherwise "".
-- **company_owner:** Another person at the company (e.g. owner, decision-maker) if mentioned—**not** the contact themselves. Leave "" if not stated.
+- **company_owner:** Another person at the company (e.g. owner, decision-maker) if mentioned—**not** the contact themselves. Leave "" if not stated or if the only person mentioned is the contact.
 
 **Output format (JSON only):**
 {"first_name": "", "last_name": "", "email": "", "phone": "", "job_title": "", "company_name": "", "company_domain": "", "city": "", "state_region": "", "company_owner": ""}
 
 ---
-**Email to analyse:**
+**Email to analyse (body may be truncated; extract only from the content provided):**
 
 From: """ + (sender or "") + """
 To: """ + (to or "") + """
@@ -777,14 +779,14 @@ def generate_activity_note_from_email(
 
 2. **Never mention the user's name.** The note is the user's own activity log. When they sent the email, do NOT say "Email from [user name]" or "Email by [user name]". Say "Sent an email to [contact]." The contact is always the *other* party: if the user sent the email, contact = recipient (To); if the user received it, contact = sender (From).
 
-3. **Never include any email address in the note.** Refer to the contact by **name only**. Use the contact's name when it appears in: (a) the From/To header display name (e.g. "Lakshmi B <...>"), or (b) the email body (e.g. "Dear Lakshmi B"). If no name is available, do NOT fall back to the email address—instead write "Sent an email." or "Received an email." and continue with "It mentions that..." and the details. The note must never contain an email address (no @ or domain).
+3. **Never include any email address in the note.** Refer to the contact by **name only**. Use the contact's name when it appears in: (a) the From/To header display name (e.g. "Lakshmi B <...>"), or (b) the email body (e.g. "Dear Lakshmi B"). Do not invent or guess a contact name. If no name is available, do NOT fall back to the email address—instead write "Sent an email." or "Received an email." and continue with "It mentions that..." and the details. The note must never contain an email address (no @ or domain).
 
 4. **Content:** After the opening, use "It mentions that...", "It stated that...", or "It noted that..." and in 1–3 sentences capture key points, requests, or outcomes. Past tense, neutral tone. If the email body explicitly mentions a date, time, or meeting time, include it in the note (e.g. "It mentions that the meeting is scheduled for Friday at 3pm.").
 
 5. **Format:** Flowing prose only. No bullets, no "Note:", no JSON, no markdown. Typically 2–4 sentences. Output ONLY the note text.
 
 ---
-Email to turn into an activity note:
+Email to turn into an activity note (body may be truncated; base the note only on the content provided):
 
 From: """ + (sender or "") + """
 To: """ + (to or "") + """

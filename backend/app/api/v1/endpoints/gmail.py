@@ -57,6 +57,46 @@ def _headers_map(msg: dict) -> Dict[str, str]:
     return {h.get("name", "").lower(): h.get("value", "") for h in headers if h.get("name")}
 
 
+async def _ensure_user_email_in_tokens(
+    supabase: SupabaseService,
+    user_id: str,
+    tokens_row: Dict[str, Any],
+    service: Any,
+) -> Optional[str]:
+    """
+    If gmail_tokens has no email, fetch Gmail profile and update the row.
+    Returns the user's Gmail email, or None if fetch/update failed.
+    """
+    if (tokens_row.get("email") or "").strip():
+        return (tokens_row.get("email") or "").strip()
+    try:
+        profile = service.users().getProfile(userId="me").execute()
+        gmail_email = (profile.get("emailAddress") or "").strip() or None
+        if not gmail_email:
+            return None
+        last_connected_at = None
+        raw_connected = tokens_row.get("last_connected_at")
+        if raw_connected:
+            try:
+                last_connected_at = datetime.fromisoformat(str(raw_connected).replace("Z", "+00:00"))
+            except Exception:
+                pass
+        token_expiry = tokens_row.get("token_expiry")
+        await supabase.upsert_gmail_tokens(
+            user_id=user_id,
+            access_token=tokens_row.get("access_token") or "",
+            refresh_token=tokens_row.get("refresh_token"),
+            token_expiry=token_expiry,
+            last_connected_at=last_connected_at,
+            email=gmail_email,
+        )
+        logger.info("Backfilled Gmail email for user %s", user_id)
+        return gmail_email
+    except Exception as e:
+        logger.warning("Could not backfill Gmail profile email for user %s: %s", user_id, e)
+        return None
+
+
 @router.get("/test")
 async def gmail_test(
     user_id: str = Depends(get_current_user_id),
@@ -305,6 +345,8 @@ async def gmail_generate_activity_note(
     subject = headers.get("subject", "")
     body_text = _get_body_from_payload(msg.get("payload") or {})
     user_email = (tokens_row.get("email") or "").strip() or None
+    if not user_email:
+        user_email = await _ensure_user_email_in_tokens(supabase, user_id, tokens_row, service)
     note = generate_activity_note_from_email(
         sender=email_from,
         to=email_to,
@@ -358,6 +400,8 @@ async def gmail_extract_contact(
     subject = headers.get("subject", "")
     body_text = _get_body_from_payload(msg.get("payload") or {})
     user_email = (tokens_row.get("email") or "").strip() or None
+    if not user_email:
+        user_email = await _ensure_user_email_in_tokens(supabase, user_id, tokens_row, service)
     extracted = extract_contact_from_email(
         sender=email_from,
         to=email_to,
