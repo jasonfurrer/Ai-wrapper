@@ -494,6 +494,9 @@ function ContactSearchPanel(): React.ReactElement {
 
   return (
     <div className="space-y-3 p-3 border-b border-border shrink-0">
+      <div className="shrink-0">
+        <h2 className="text-base font-semibold">Contact Search</h2>
+      </div>
       {/* Search bar */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden />
