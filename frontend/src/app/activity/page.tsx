@@ -242,15 +242,15 @@ const MOCK_RECOMMENDED_DATES: RecommendedTouchDate[] = [
 
 const MOCK_DRAFTS: Record<DraftTone, { text: string; confidence: number }> = {
   original:
-    { text: 'Summary of our discussion: Q1 goals, proposal timeline, and next steps. Contact asked for formal proposal by end of week. Follow-up call scheduled for Wednesday.', confidence: 92 },
+    { text: 'Your note summary will appear here after processing.', confidence: 0 },
   formal:
-    { text: 'Dear [Contact], Thank you for your time on our recent call. Please find attached the proposal we discussed. I would welcome the opportunity to address any questions at your convenience. Best regards.', confidence: 88 },
+    { text: 'Formal note: summary and next steps will appear here.', confidence: 0 },
   concise:
-    { text: 'Hi — Attaching the proposal from our call. Let me know if you have questions or want to schedule a follow-up.', confidence: 85 },
+    { text: 'Brief note: main points and follow-ups will appear here.', confidence: 0 },
   warm:
     { text: "Hi [Contact], It was great connecting! As promised, here’s the proposal we talked about. Happy to jump on a quick call if anything needs clarification. Thanks!", confidence: 82 },
   detailed:
-    { text: 'Following our discussion on Q1 goals and the proposal timeline: we agreed to send the formal proposal by end of week and schedule a follow-up call for Wednesday.', confidence: 85 },
+    { text: 'Detailed note: context, outcomes, and action items will appear here.', confidence: 0 },
 };
 
 const DRAFT_TONE_LABELS: Record<DraftTone, string> = {
