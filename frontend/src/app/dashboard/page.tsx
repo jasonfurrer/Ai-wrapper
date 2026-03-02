@@ -456,6 +456,24 @@ function getUpcomingMonthRange(): { from: string; to: string } {
   return { from: fmt(start), to: fmt(end) };
 }
 
+/** Overdue: past 7 days (yesterday back 6 days = 7 days total). */
+function getOverdueWeekRange(): { from: string; to: string } {
+  const yesterday = subDays(new Date(), 1);
+  const from = subDays(yesterday, 6);
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { from: fmt(from), to: fmt(yesterday) };
+}
+
+/** Overdue: past 30 days (yesterday back 29 days = 30 days total). */
+function getOverdueMonthRange(): { from: string; to: string } {
+  const yesterday = subDays(new Date(), 1);
+  const from = subDays(yesterday, 29);
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { from: fmt(from), to: fmt(yesterday) };
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -523,6 +541,8 @@ export default function DashboardPage(): React.ReactElement {
   });
   const [upcomingPopoverOpen, setUpcomingPopoverOpen] = React.useState(false);
   const upcomingPopoverCloseTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [overduePopoverOpen, setOverduePopoverOpen] = React.useState(false);
+  const overduePopoverCloseTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref holding latest state so we can persist on unmount (flush before navigate away)
   const latestStateRef = React.useRef({
     selectedActivityId,
@@ -545,6 +565,10 @@ export default function DashboardPage(): React.ReactElement {
       if (upcomingPopoverCloseTimeoutRef.current) {
         clearTimeout(upcomingPopoverCloseTimeoutRef.current);
         upcomingPopoverCloseTimeoutRef.current = null;
+      }
+      if (overduePopoverCloseTimeoutRef.current) {
+        clearTimeout(overduePopoverCloseTimeoutRef.current);
+        overduePopoverCloseTimeoutRef.current = null;
       }
     };
   }, []);
@@ -838,12 +862,39 @@ export default function DashboardPage(): React.ReactElement {
     setDatePickerValue(getTodayDateString());
     setFilterDialogOpen(false);
   };
-  const handleQuickViewOverdue = () => {
+  /** Overdue: incomplete tasks with due date before today — All, Week (past 7 days), or Month (past 30 days). */
+  const handleOverdueAll = () => {
     const yesterday = getYesterdayDateString();
     const filter: FilterState = {
       ...DEFAULT_FILTER,
       dateFrom: QUICK_VIEW_OVERDUE_DATE_FROM,
       dateTo: yesterday,
+      taskStatus: ['not_completed'],
+    };
+    setFilterApplied(filter);
+    setFilterDraft(filter);
+    setDatePickerValue('');
+    setFilterDialogOpen(false);
+  };
+  const handleOverdueWeek = () => {
+    const { from, to } = getOverdueWeekRange();
+    const filter: FilterState = {
+      ...DEFAULT_FILTER,
+      dateFrom: from,
+      dateTo: to,
+      taskStatus: ['not_completed'],
+    };
+    setFilterApplied(filter);
+    setFilterDraft(filter);
+    setDatePickerValue('');
+    setFilterDialogOpen(false);
+  };
+  const handleOverdueMonth = () => {
+    const { from, to } = getOverdueMonthRange();
+    const filter: FilterState = {
+      ...DEFAULT_FILTER,
+      dateFrom: from,
+      dateTo: to,
       taskStatus: ['not_completed'],
     };
     setFilterApplied(filter);
@@ -942,7 +993,9 @@ export default function DashboardPage(): React.ReactElement {
     ) {
       return 'today' as const;
     }
-    // Overdue
+    const overdueWeek = getOverdueWeekRange();
+    const overdueMonth = getOverdueMonthRange();
+    // Overdue - All
     if (
       !datePickerValue &&
       filterApplied.dateFrom === QUICK_VIEW_OVERDUE_DATE_FROM &&
@@ -951,7 +1004,29 @@ export default function DashboardPage(): React.ReactElement {
       filterApplied.taskStatus[0] === 'not_completed' &&
       filterApplied.priority.length === 0
     ) {
-      return 'overdue' as const;
+      return 'overdue_all' as const;
+    }
+    // Overdue - Week
+    if (
+      !datePickerValue &&
+      filterApplied.dateFrom === overdueWeek.from &&
+      filterApplied.dateTo === overdueWeek.to &&
+      filterApplied.taskStatus.length === 1 &&
+      filterApplied.taskStatus[0] === 'not_completed' &&
+      filterApplied.priority.length === 0
+    ) {
+      return 'overdue_week' as const;
+    }
+    // Overdue - Month
+    if (
+      !datePickerValue &&
+      filterApplied.dateFrom === overdueMonth.from &&
+      filterApplied.dateTo === overdueMonth.to &&
+      filterApplied.taskStatus.length === 1 &&
+      filterApplied.taskStatus[0] === 'not_completed' &&
+      filterApplied.priority.length === 0
+    ) {
+      return 'overdue_month' as const;
     }
     // This week
     if (
@@ -1324,27 +1399,120 @@ export default function DashboardPage(): React.ReactElement {
                 Show tasks for this calendar week (Mon–Sun)
               </TooltipContent>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={activeQuickView === 'overdue' ? 'secondary' : 'outline'}
-                  size="sm"
-                  className={cn(
-                    'h-9 gap-1.5 shrink-0',
-                    activeQuickView === 'overdue' && 'ring-2 ring-primary/50'
-                  )}
-                  onClick={handleQuickViewOverdue}
-                  aria-pressed={activeQuickView === 'overdue'}
-                  aria-label="Show overdue tasks"
-                >
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  Overdue
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                Show incomplete tasks with due dates before today
-              </TooltipContent>
-            </Tooltip>
+            <Popover
+              open={overduePopoverOpen}
+              onOpenChange={(open) => {
+                if (!open && overduePopoverCloseTimeoutRef.current) {
+                  clearTimeout(overduePopoverCloseTimeoutRef.current);
+                  overduePopoverCloseTimeoutRef.current = null;
+                }
+                setOverduePopoverOpen(open);
+              }}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant={
+                        activeQuickView === 'overdue_all' ||
+                        activeQuickView === 'overdue_week' ||
+                        activeQuickView === 'overdue_month'
+                          ? 'secondary'
+                          : 'outline'
+                      }
+                      size="sm"
+                      className={cn(
+                        'h-9 gap-1.5 shrink-0',
+                        (activeQuickView === 'overdue_all' ||
+                          activeQuickView === 'overdue_week' ||
+                          activeQuickView === 'overdue_month') &&
+                          'ring-2 ring-primary/50'
+                      )}
+                      aria-pressed={
+                        activeQuickView === 'overdue_all' ||
+                        activeQuickView === 'overdue_week' ||
+                        activeQuickView === 'overdue_month'
+                      }
+                      aria-label="Show overdue tasks"
+                      aria-haspopup="menu"
+                      onMouseEnter={() => {
+                        if (overduePopoverCloseTimeoutRef.current) {
+                          clearTimeout(overduePopoverCloseTimeoutRef.current);
+                          overduePopoverCloseTimeoutRef.current = null;
+                        }
+                        setOverduePopoverOpen(true);
+                      }}
+                      onMouseLeave={() => {
+                        overduePopoverCloseTimeoutRef.current = window.setTimeout(
+                          () => setOverduePopoverOpen(false),
+                          150
+                        );
+                      }}
+                    >
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      Overdue
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                    </Button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Hover for options: All, Week, or Month
+                </TooltipContent>
+              </Tooltip>
+              <PopoverContent
+                className="w-40 p-1"
+                align="start"
+                onMouseEnter={() => {
+                  if (overduePopoverCloseTimeoutRef.current) {
+                    clearTimeout(overduePopoverCloseTimeoutRef.current);
+                    overduePopoverCloseTimeoutRef.current = null;
+                  }
+                  setOverduePopoverOpen(true);
+                }}
+                onMouseLeave={() => {
+                  overduePopoverCloseTimeoutRef.current = window.setTimeout(
+                    () => setOverduePopoverOpen(false),
+                    150
+                  );
+                }}
+              >
+                <div className="flex flex-col gap-0.5">
+                  <Button
+                    variant={activeQuickView === 'overdue_all' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-8 justify-start font-normal"
+                    onClick={() => {
+                      handleOverdueAll();
+                      setOverduePopoverOpen(false);
+                    }}
+                  >
+                    All
+                  </Button>
+                  <Button
+                    variant={activeQuickView === 'overdue_week' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-8 justify-start font-normal"
+                    onClick={() => {
+                      handleOverdueWeek();
+                      setOverduePopoverOpen(false);
+                    }}
+                  >
+                    Week
+                  </Button>
+                  <Button
+                    variant={activeQuickView === 'overdue_month' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-8 justify-start font-normal"
+                    onClick={() => {
+                      handleOverdueMonth();
+                      setOverduePopoverOpen(false);
+                    }}
+                  >
+                    Month
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
             <Popover
               open={upcomingPopoverOpen}
               onOpenChange={(open) => {
