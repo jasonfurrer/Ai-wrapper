@@ -83,6 +83,7 @@ import {
   type GmailSearchFolder,
 } from '@/lib/api/gmail';
 import { getGmailStatus } from '@/lib/api/integrations';
+import { useAuth } from '@/contexts/AuthContext';
 
 const DEBOUNCE_MS = 300;
 
@@ -799,11 +800,13 @@ function contactDisplayName(c: Contact): string {
 function ActivityPageContent(): React.ReactElement {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { user } = useAuth() as { user: { user_metadata?: { full_name?: string } } | null };
   const activityId = searchParams.get('id');
   const urlContactId = searchParams.get('contact_id');
   const urlCompanyId = searchParams.get('company_id');
   const urlContactName = searchParams.get('contact_name');
   const urlAccountName = searchParams.get('account_name');
+  const senderName = (user?.user_metadata as { full_name?: string } | undefined)?.full_name ?? '';
 
   // Initial contact/account from URL so they appear immediately when opening from Dashboard (no wait for getActivity or communication summary)
   const initialContactName = urlContactName ? decodeURIComponent(urlContactName) : '';
@@ -881,6 +884,7 @@ function ActivityPageContent(): React.ReactElement {
   const [composeFrom, setComposeFrom] = React.useState('');
   const [composeSubject, setComposeSubject] = React.useState('');
   const [composeBody, setComposeBody] = React.useState('');
+  const [suggestedSubjectFromDrafts, setSuggestedSubjectFromDrafts] = React.useState('');
   const [toast, setToast] = React.useState<{ open: boolean; variant: 'success' | 'error'; title: string; description?: string }>({
     open: false,
     variant: 'success',
@@ -891,6 +895,7 @@ function ActivityPageContent(): React.ReactElement {
   };
   const draftSentForProcessingRef = React.useRef<string>('');
   const restoredFromDraftRef = React.useRef(false);
+  const smartComposeSectionRef = React.useRef<HTMLDivElement>(null);
 
   // Restore draft from localStorage on mount (overridden when opening a task from dashboard with no draft, or on submit)
   React.useLayoutEffect(() => {
@@ -1363,7 +1368,7 @@ function ActivityPageContent(): React.ReactElement {
     const draft = drafts[tone];
     const bodyText = draft?.text ?? '';
     setComposeTo(selectedContact?.email ?? '');
-    setComposeSubject(subject || '');
+    setComposeSubject(suggestedSubjectFromDrafts || subject || '');
     setComposeBody(bodyText);
     try {
       const status = await getGmailStatus();
@@ -1404,8 +1409,10 @@ function ActivityPageContent(): React.ReactElement {
         client_notes: clientNotes,
         task_title: subject.trim(),
         last_touch_date: activity?.updated_at ?? null,
+        sender_name: senderName || null,
       });
       setDrafts((prev) => ({ ...prev, ...res.drafts }));
+      setSuggestedSubjectFromDrafts(res.suggested_subject ?? '');
       showToast('success', 'Email drafts generated', 'Warm, concise, and formal drafts are ready in Smart compose.');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to generate email drafts.';
@@ -1510,7 +1517,7 @@ function ActivityPageContent(): React.ReactElement {
             {generateDraftsError && (
               <p className="mt-2 text-sm text-status-at-risk">{generateDraftsError}</p>
             )}
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 variant="default"
@@ -1527,6 +1534,15 @@ function ActivityPageContent(): React.ReactElement {
                   'Generate drafts'
                 )}
               </Button>
+              {!generateDraftsLoading && (drafts.warm?.text || drafts.concise?.text || drafts.formal?.text) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => smartComposeSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                >
+                  Check drafts
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -1975,7 +1991,7 @@ function ActivityPageContent(): React.ReactElement {
         </Card>
 
         {/* Smart compose - email drafts (concise, formal, warm) */}
-        <Card className="border-[1.5px]">
+        <Card className="border-[1.5px]" ref={smartComposeSectionRef}>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg font-semibold flex items-center gap-2">
               <Mail className="h-4 w-4" />
@@ -1986,25 +2002,32 @@ function ActivityPageContent(): React.ReactElement {
             </p>
           </CardHeader>
           <CardContent className="space-y-2 pt-0">
-            {SMART_COMPOSE_TONES.map((tone) => {
-              const draft = drafts[tone];
-              const preview = draft?.text ?? '';
-              return (
-                <button
-                  key={tone}
-                  type="button"
-                  onClick={() => openEmailCompose(tone)}
-                  className="w-full text-left rounded-lg border-2 border-border bg-card p-3 shadow-sm transition-shadow duration-200 hover:shadow-card-hover hover:border-primary/50"
-                >
-                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary inline-block mb-2">
-                    {SMART_COMPOSE_LABELS[tone]}
-                  </span>
-                  <p className="text-sm text-muted-foreground line-clamp-2">
-                    {preview || `No ${SMART_COMPOSE_LABELS[tone].toLowerCase()} draft yet. Process your notes first.`}
-                  </p>
-                </button>
-              );
-            })}
+            {generateDraftsLoading ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <span className="text-sm">Generating drafts…</span>
+              </div>
+            ) : (
+              SMART_COMPOSE_TONES.map((tone) => {
+                const draft = drafts[tone];
+                const preview = draft?.text ?? '';
+                return (
+                  <button
+                    key={tone}
+                    type="button"
+                    onClick={() => openEmailCompose(tone)}
+                    className="w-full text-left rounded-lg border-2 border-border bg-card p-3 shadow-sm transition-shadow duration-200 hover:shadow-card-hover hover:border-primary/50"
+                  >
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary inline-block mb-2">
+                      {SMART_COMPOSE_LABELS[tone]}
+                    </span>
+                    <p className="text-sm text-muted-foreground line-clamp-2">
+                      {preview || `No ${SMART_COMPOSE_LABELS[tone].toLowerCase()} draft yet. Process your notes first.`}
+                    </p>
+                  </button>
+                );
+              })
+            )}
           </CardContent>
         </Card>
 

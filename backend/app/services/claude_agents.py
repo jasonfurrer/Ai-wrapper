@@ -444,25 +444,30 @@ def generate_email_drafts(
     client_notes: str,
     task_title: str,
     last_touch_date: str | None = None,
-) -> dict[str, dict]:
+    sender_name: str | None = None,
+) -> tuple[dict[str, dict], str]:
     """
     Generate three email drafts (warm, concise, formal) for the Smart compose feature.
     Uses email instructions + task title to define the email objective; client notes and
-    last touch date as context. All context is weighted so drafts are relevant and consistent.
-    Returns dict keyed by tone: { "warm": {text, confidence}, "concise": {...}, "formal": {...} }.
+    last touch date as context. sender_name is used in the sign-off (no placeholder).
+    Returns (drafts_dict, suggested_subject). suggested_subject is derived per prompt rules.
     """
     instructions = (email_instructions or "").strip()
     notes = (client_notes or "").strip()
     title = (task_title or "").strip()
     last_touch = (last_touch_date or "").strip()
+    sender = (sender_name or "").strip()
 
     if not notes and not title and not instructions:
         fallback = "No context provided. Add client notes, a task title, or email instructions and try again."
-        return {
-            "warm": {"text": fallback, "confidence": 0},
-            "concise": {"text": fallback, "confidence": 0},
-            "formal": {"text": fallback, "confidence": 0},
-        }
+        return (
+            {
+                "warm": {"text": fallback, "confidence": 0},
+                "concise": {"text": fallback, "confidence": 0},
+                "formal": {"text": fallback, "confidence": 0},
+            },
+            "",
+        )
 
     client = _get_client()
     max_notes_len = 24_000
@@ -475,39 +480,59 @@ def generate_email_drafts(
             f"{last_touch}\nUse this to inform tone (e.g. 'following up after our conversation on...') where relevant."
         )
 
-    prompt = f"""You are an expert sales and relationship email writer. Your task is to generate three ready-to-send email drafts for the same situation, each in a different tone: **warm**, **concise**, and **formal**.
+    sender_block = ""
+    if sender:
+        sender_block = (
+            f"\n**Sender name (use this exact name in the sign-off of every draft):** {sender}\n"
+            "Do NOT use '[Your name]', '[Sender]', or any placeholder. End each draft with the actual sign-off using this name (e.g. 'Best regards,\n{sender}' or 'Thanks,\n{sender}')."
+        )
+    else:
+        sender_block = (
+            "\n**Sender name:** Not provided. Use a professional sign-off followed by a generic placeholder such as '[Your name]' or '[Sender]' only in this case."
+        )
+
+    prompt = f"""You are an expert sales and relationship email writer. Your task is to generate three ready-to-send email drafts for the same situation, each in a different tone: **warm**, **concise**, and **formal**. You must also output a single **suggested_subject** line for the email.
 
 **Primary objective (you must respect this):**
 - The **task title** and **email draft instructions** together define the main objective of the email.
-- Example: if the task title is "Check in with Acme Corp" and instructions say "mention the Q2 proposal and ask for a 15-min call", the email must be a check-in that references the Q2 proposal and invites a 15-minute call. Do not write a generic follow-up if the objective is a check-in; do not write a check-in if the objective is to send a proposal.
-- Treat the task title as the *purpose* of the outreach (e.g. "Follow-up on contract", "Send proposal", "Check in with X customer", "Thank you after meeting"). The instructions add specifics: tone preferences, points to include, things to avoid, or structure. Both are mandatory context for what the email must achieve.
+- The task title is the *purpose* of the outreach in the CRM (e.g. "Check in with Acme Corp", "Follow-up on contract", "Send proposal"). The instructions add specifics: tone preferences, points to include, things to avoid, structure, or **a subject line**.
+- Example: if the task title is "Check in with Acme Corp" and instructions say "mention the Q2 proposal and ask for a 15-min call", the email must be a check-in that references the Q2 proposal and invites a 15-minute call. Do not write a generic follow-up if the objective is a check-in.
+- Both task title and instructions are mandatory context for what the email must achieve.
+
+**Subject line (suggested_subject) — follow this order of precedence:**
+1. **If the email draft instructions explicitly mention or specify a subject line** (e.g. "subject: Follow-up on our call", "use subject: Q2 proposal attached", "email subject should be..."), use that as the suggested_subject. Extract or paraphrase exactly what the user asked for; do not substitute the task title unless it matches.
+2. **If the instructions do not specify a subject**, derive a subject from the **context of the current email**: the purpose of the email, the relationship (from client notes), and the main ask or topic. The subject should be concise (under ~60 characters when practical), clear, and specific to this email (e.g. "Quick follow-up on Q2 proposal", "Availability for a 15-min call next week", "Thank you – next steps").
+3. **Use the task title as the email subject only when** (a) it naturally reads as an email subject line (e.g. "Follow-up on contract", "Send proposal"), and (b) the instructions did not specify a subject and the task title accurately reflects the email content. Do NOT default to the task title when a more specific, context-derived subject is possible (e.g. task title "Check in with Acme Corp" → prefer a subject like "Checking in – Q2 proposal and next steps" over literally "Check in with Acme Corp" unless the user instructed otherwise).
+Output the chosen subject in the **suggested_subject** field of your JSON.
 
 **Context you must use:**
-1. **Client notes** (below): These are the same notes used for the contact's communication history / summary. Use them to:
+1. **Client notes** (below): Same notes used for the contact's communication history. Use them to:
    - Pull relevant facts, commitments, and prior discussion points so the email is accurate and personalised.
    - Reference specific details (e.g. "as we discussed on the call", "the timeline you mentioned") where they support the objective.
    - Avoid inventing facts; only use information that appears in the notes.
-2. **Last touch date** (if provided): Use it to frame recency (e.g. "following up from our conversation on...", "it's been a few weeks since we last spoke") and to keep the tone appropriate.
+2. **Last touch date** (if provided): Use it to frame recency (e.g. "following up from our conversation on...", "it's been a few weeks since we last spoke").
+{sender_block}
 {last_touch_block}
 
 **Requirements for each draft:**
-- **Warm**: Friendly, personable, and relationship-oriented. Appropriate for existing relationships or when the goal is to build rapport. Use a natural, conversational tone while remaining professional. Can include a brief personal touch or reference to prior interaction. Sign off in a warm but professional way (e.g. "Looking forward to connecting", "Thanks again").
-- **Concise**: Short and to the point. Lead with the objective; minimal preamble. Use clear sentences and bullets only if they add clarity. No filler. Ideal for busy recipients. Get the ask or next step in early. Confidence should reflect how well the draft stays brief without losing essential information.
-- **Formal**: Professional, polished, and suitable for senior or external stakeholders. Complete sentences, proper salutation and sign-off (e.g. "Dear [Name]", "Best regards"). Avoid colloquialisms and casual language. Maintain a business-appropriate register throughout.
+- **Warm**: Friendly, personable, and relationship-oriented. Use a natural, conversational tone while remaining professional. Include an appropriate greeting and sign-off. Use the sender name in the sign-off when provided (no placeholders).
+- **Concise**: Short and to the point. Lead with the objective; minimal preamble. Clear sentences; bullets only if they add clarity. No filler. Get the ask or next step in early. Use the sender name in the sign-off when provided.
+- **Formal**: Professional, polished, suitable for senior or external stakeholders. Complete sentences, proper salutation and sign-off (e.g. "Dear [Contact Name]", "Best regards"). Avoid colloquialisms. Use the sender name in the sign-off when provided.
 
 **Rules (strict):**
-- Each draft must be a **complete email body** (no subject line in the body; the subject is handled separately). Include an appropriate greeting and sign-off in each.
-- All three drafts must fulfil the **same objective** (defined by task title + instructions); only the tone and length differ.
-- Do not make up names, dates, or facts not present in the client notes. If the notes do not specify a name, use a placeholder like "[Contact Name]" or "there".
-- Output **only** valid JSON. No markdown code fences, no explanation before or after. Use this exact structure:
-{{"warm": {{"text": "<full email body>", "confidence": number}}, "concise": {{"text": "<full email body>", "confidence": number}}, "formal": {{"text": "<full email body>", "confidence": number}}}}
-- confidence: integer 0–100 for each draft. Use 85+ when the context clearly supports the draft; 70–84 when context is partial; 50–69 when context is thin but the objective is clear; below 50 when you had to infer heavily.
+- Each draft must be a **complete email body** only (no subject line inside the body). Include a greeting and a sign-off in each draft.
+- **Sign-off:** When the sender name is provided, every draft must end with the actual sender name (e.g. "Best regards,\nJohn Smith"). Never use "[Your name]", "[Sender]", or similar when the sender name is given. When not provided, you may use a placeholder.
+- All three drafts must fulfil the **same objective** (task title + instructions); only the tone and length differ.
+- Do not make up names, dates, or facts not present in the client notes. If the recipient's name is unknown, use "[Contact Name]" or "there" in the greeting only.
+- Output **only** valid JSON. No markdown code fences, no explanation. Use this exact structure (include suggested_subject at the top level):
+{{"suggested_subject": "<one subject line string>", "warm": {{"text": "<full email body>", "confidence": number}}, "concise": {{"text": "<full email body>", "confidence": number}}, "formal": {{"text": "<full email body>", "confidence": number}}}}
+- confidence: integer 0–100 per draft. 85+ when context clearly supports the draft; 70–84 when partial; 50–69 when thin but objective is clear; below 50 when inferring heavily.
 
 ---
-**Task title (defines the email purpose):**
+**Task title (CRM purpose of the outreach; use for objective and only for subject when it fits per rules above):**
 {title or "(none provided)"}
 
-**Email draft instructions (user-specific guidance; must be reflected in all three drafts):**
+**Email draft instructions (user-specific guidance; check here first for an explicit subject):**
 {instructions or "(none provided)"}
 ---
 **Client notes (use for accuracy and personalisation):**
@@ -526,6 +551,7 @@ def generate_email_drafts(
         parsed = _parse_json_block(text)
         if not isinstance(parsed, dict):
             raise ValueError("Response is not a JSON object")
+        suggested_subject = (parsed.get("suggested_subject") or "").strip() if isinstance(parsed.get("suggested_subject"), str) else ""
         result: dict[str, dict] = {}
         for tone in ("warm", "concise", "formal"):
             val = parsed.get(tone)
@@ -539,16 +565,19 @@ def generate_email_drafts(
                     "text": "(No draft generated for this tone.)",
                     "confidence": 0,
                 }
-        logger.info("[generate_email_drafts] success tones=%s", list(result.keys()))
-        return result
+        logger.info("[generate_email_drafts] success tones=%s suggested_subject=%s", list(result.keys()), suggested_subject[:50] if suggested_subject else "")
+        return (result, suggested_subject)
     except Exception as e:
         logger.exception("[generate_email_drafts] error: %s", e)
         fallback = "Unable to generate drafts. Please try again."
-        return {
-            "warm": {"text": fallback, "confidence": 0},
-            "concise": {"text": fallback, "confidence": 0},
-            "formal": {"text": fallback, "confidence": 0},
-        }
+        return (
+            {
+                "warm": {"text": fallback, "confidence": 0},
+                "concise": {"text": fallback, "confidence": 0},
+                "formal": {"text": fallback, "confidence": 0},
+            },
+            "",
+        )
 
 
 # ---------------------------------------------------------------------------

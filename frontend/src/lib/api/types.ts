@@ -245,10 +245,12 @@ export interface GenerateEmailDraftsRequest {
   client_notes: string;
   task_title: string;
   last_touch_date?: string | null;
+  sender_name?: string | null;
 }
 
 export interface GenerateEmailDraftsResponse {
   drafts: Record<string, DraftOut>; // keys: warm, concise, formal
+  suggested_subject?: string;
 }
 
 // -----------------------------------------------------------------------------

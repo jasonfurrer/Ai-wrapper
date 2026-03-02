@@ -162,11 +162,13 @@ class GenerateEmailDraftsRequest(BaseModel):
     client_notes: str = ""
     task_title: str = ""
     last_touch_date: str | None = None  # ISO date or human-readable; optional
+    sender_name: str | None = None  # Name attached to sender email; used in sign-off
 
 
 class GenerateEmailDraftsResponse(BaseModel):
-    """Response from generate-email-drafts: warm, concise, formal email drafts."""
+    """Response from generate-email-drafts: warm, concise, formal email drafts and suggested subject."""
     drafts: dict[str, DraftOut] = {}  # keys: warm, concise, formal
+    suggested_subject: str = ""
 
 
 def _hubspot_priority(value: str | None) -> str | None:

@@ -1109,17 +1109,18 @@ async def generate_smart_compose_drafts(
 ) -> GenerateEmailDraftsResponse:
     """POST /api/v1/activities/generate-email-drafts — Claude agent for Smart compose (warm, concise, formal)."""
     try:
-        drafts_map = generate_email_drafts(
+        drafts_map, suggested_subject = generate_email_drafts(
             email_instructions=body.email_instructions or "",
             client_notes=body.client_notes or "",
             task_title=body.task_title or "",
             last_touch_date=body.last_touch_date,
+            sender_name=body.sender_name,
         )
         drafts_out = {
             k: DraftOut(text=v["text"], confidence=v["confidence"])
             for k, v in drafts_map.items()
         }
-        return GenerateEmailDraftsResponse(drafts=drafts_out)
+        return GenerateEmailDraftsResponse(drafts=drafts_out, suggested_subject=suggested_subject or "")
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException:

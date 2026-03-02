@@ -317,6 +317,7 @@ export async function generateEmailDrafts(
           client_notes: data.client_notes ?? '',
           task_title: data.task_title ?? '',
           last_touch_date: data.last_touch_date ?? null,
+          sender_name: data.sender_name ?? null,
         }),
       }
     );
