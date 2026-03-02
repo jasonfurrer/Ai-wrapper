@@ -1800,7 +1800,7 @@ function ActivityPageContent(): React.ReactElement {
                   <PopoverTrigger asChild>
                     <Button
                       variant="outline"
-                      className="flex-1 justify-start text-left font-normal min-w-0"
+                      className="flex-1 justify-start text-left font-normal min-w-0 bg-card"
                     >
                       <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                       {activityDate ? format(new Date(activityDate + 'T00:00:00'), 'MMM d, yyyy') : 'Pick a date'}
@@ -1835,7 +1835,7 @@ function ActivityPageContent(): React.ReactElement {
                   <PopoverTrigger asChild>
                     <Button
                       variant="outline"
-                      className="flex-1 justify-start text-left font-normal min-w-0"
+                      className="flex-1 justify-start text-left font-normal min-w-0 bg-card"
                     >
                       <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
                       {dueDate ? format(new Date(dueDate + 'T00:00:00'), 'MMM d, yyyy') : 'Pick a date'}
@@ -1913,7 +1913,7 @@ function ActivityPageContent(): React.ReactElement {
               <Input
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
-                className="mt-2"
+                className="mt-2 bg-card"
               />
             </div>
             <div>
@@ -1966,7 +1966,7 @@ function ActivityPageContent(): React.ReactElement {
                   key={tone}
                   type="button"
                   onClick={() => openEmailCompose(tone)}
-                  className="w-full text-left rounded-md border border-border p-3 hover:bg-muted/50 hover:border-primary/50 transition-colors"
+                  className="w-full text-left rounded-lg border-2 border-border bg-card p-3 shadow-sm transition-shadow duration-200 hover:shadow-card-hover hover:border-primary/50"
                 >
                   <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary inline-block mb-2">
                     {SMART_COMPOSE_LABELS[tone]}
@@ -2001,8 +2001,8 @@ function ActivityPageContent(): React.ReactElement {
                     <div
                       key={tone}
                       className={cn(
-                        'rounded-md border p-3 transition-colors',
-                        isSelected ? 'border-primary bg-primary/5' : 'border-border'
+                        'rounded-lg border-2 p-3 shadow-sm transition-shadow duration-200 bg-card',
+                        isSelected ? 'border-primary shadow-card-hover' : 'border-border hover:shadow-card-hover'
                       )}
                     >
                       <div className="flex justify-between items-start gap-2 mb-2">
