@@ -750,12 +750,11 @@ export default function DashboardPage(): React.ReactElement {
   );
 
   const filteredByDate = React.useMemo(() => {
-    // When date range filter is active, API already returns tasks in range; don't restrict by single date
+    // When date range filter is active, API already returns tasks in range; use as-is
     if (filterApplied.dateFrom || filterApplied.dateTo) return activities;
-    if (!datePickerValue) return activities;
-    return activities.filter((item) =>
-      isSameDay(item.activity.lastTouchDate, datePickerValue)
-    );
+    // When single date is selected, API was called with date= and already filtered by due_date; don't filter again by lastTouchDate
+    if (datePickerValue) return activities;
+    return activities;
   }, [activities, datePickerValue, filterApplied.dateFrom, filterApplied.dateTo]);
 
   const filtered = React.useMemo(() => {
