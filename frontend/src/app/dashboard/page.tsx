@@ -843,15 +843,19 @@ export default function DashboardPage(): React.ReactElement {
     setFilterApplied(DEFAULT_FILTER);
   };
 
+  /** Clear only the applied filters (priority, task status); keep current view (All, Today, This Week, Overdue, Upcoming). */
   const handleClearAllFilters = () => {
-    const showAllFilter = {
-      ...DEFAULT_FILTER,
-      dateFrom: ALL_TASKS_DATE_FROM,
-      dateTo: ALL_TASKS_DATE_TO,
+    const isOverdueView =
+      activeQuickView === 'overdue_all' ||
+      activeQuickView === 'overdue_week' ||
+      activeQuickView === 'overdue_month';
+    const cleared: FilterState = {
+      ...filterApplied,
+      priority: [],
+      taskStatus: isOverdueView ? ['not_completed'] : [],
     };
-    setFilterDraft(showAllFilter);
-    setFilterApplied(showAllFilter);
-    setDatePickerValue('');
+    setFilterDraft(cleared);
+    setFilterApplied(cleared);
     setFilterDialogOpen(false);
   };
 
@@ -1335,16 +1339,17 @@ export default function DashboardPage(): React.ReactElement {
         {/* Left panel - Activity cards (6 cols on desktop), only this section scrolls */}
         <section className="flex flex-col min-h-0 lg:col-span-6 lg:flex-1 lg:overflow-hidden rounded-lg bg-section border border-border p-4">
           {/* Quick view presets: All, Today, This Week, Overdue, Upcoming */}
-          <div className="flex flex-wrap items-center gap-2 shrink-0 mb-4">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant={activeQuickView === 'all' ? 'secondary' : 'outline'}
-                  size="sm"
-                  className={cn(
-                    'h-9 gap-1.5 shrink-0',
-                    activeQuickView === 'all' && 'ring-2 ring-primary/50'
-                  )}
+          <div className="flex flex-nowrap items-stretch w-full gap-2 shrink-0 mb-4">
+            <div className="flex-1 min-w-0 flex">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={activeQuickView === 'all' ? 'secondary' : 'outline'}
+                    size="sm"
+                    className={cn(
+                      'h-9 gap-1.5 w-full min-w-0',
+                      activeQuickView === 'all' && 'ring-2 ring-primary/50'
+                    )}
                   onClick={handleQuickViewAll}
                   aria-pressed={activeQuickView === 'all'}
                   aria-label="Show all tasks"
@@ -1357,13 +1362,15 @@ export default function DashboardPage(): React.ReactElement {
                 Show all tasks (any date, completed or not)
               </TooltipContent>
             </Tooltip>
+            </div>
+            <div className="flex-1 min-w-0 flex">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant={activeQuickView === 'today' ? 'secondary' : 'outline'}
                   size="sm"
                   className={cn(
-                    'h-9 gap-1.5 shrink-0',
+                    'h-9 gap-1.5 w-full min-w-0',
                     activeQuickView === 'today' && 'ring-2 ring-primary/50'
                   )}
                   onClick={handleQuickViewToday}
@@ -1378,13 +1385,15 @@ export default function DashboardPage(): React.ReactElement {
                 Show tasks due today ({format(new Date(), 'dd MMM yyyy')})
               </TooltipContent>
             </Tooltip>
+            </div>
+            <div className="flex-1 min-w-0 flex">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant={activeQuickView === 'this_week' ? 'secondary' : 'outline'}
                   size="sm"
                   className={cn(
-                    'h-9 gap-1.5 shrink-0',
+                    'h-9 gap-1.5 w-full min-w-0',
                     activeQuickView === 'this_week' && 'ring-2 ring-primary/50'
                   )}
                   onClick={handleQuickViewThisWeek}
@@ -1399,6 +1408,8 @@ export default function DashboardPage(): React.ReactElement {
                 Show tasks for this calendar week (Mon–Sun)
               </TooltipContent>
             </Tooltip>
+            </div>
+            <div className="flex-1 min-w-0 flex">
             <Popover
               open={overduePopoverOpen}
               onOpenChange={(open) => {
@@ -1422,7 +1433,7 @@ export default function DashboardPage(): React.ReactElement {
                       }
                       size="sm"
                       className={cn(
-                        'h-9 gap-1.5 shrink-0',
+                        'h-9 gap-1.5 w-full min-w-0',
                         (activeQuickView === 'overdue_all' ||
                           activeQuickView === 'overdue_week' ||
                           activeQuickView === 'overdue_month') &&
@@ -1513,6 +1524,8 @@ export default function DashboardPage(): React.ReactElement {
                 </div>
               </PopoverContent>
             </Popover>
+            </div>
+            <div className="flex-1 min-w-0 flex">
             <Popover
               open={upcomingPopoverOpen}
               onOpenChange={(open) => {
@@ -1536,7 +1549,7 @@ export default function DashboardPage(): React.ReactElement {
                       }
                       size="sm"
                       className={cn(
-                        'h-9 gap-1.5 shrink-0',
+                        'h-9 gap-1.5 w-full min-w-0',
                         (activeQuickView === 'upcoming_all' ||
                           activeQuickView === 'upcoming_week' ||
                           activeQuickView === 'upcoming_month') &&
@@ -1627,6 +1640,7 @@ export default function DashboardPage(): React.ReactElement {
                 </div>
               </PopoverContent>
             </Popover>
+            </div>
           </div>
           {/* Activity search bar - search by title, contact, or company */}
           <div className="relative shrink-0 mb-3 w-full min-w-0">
@@ -1700,7 +1714,7 @@ export default function DashboardPage(): React.ReactElement {
                     size="sm"
                     className="h-9 gap-1.5 shrink-0"
                     onClick={handleClearAllFilters}
-                    aria-label="Clear all filters and show all tasks"
+                    aria-label="Clear applied filters (priority, task status)"
                   >
                     <FilterX className="h-4 w-4" />
                     Clear all filters
@@ -1708,7 +1722,7 @@ export default function DashboardPage(): React.ReactElement {
                 </span>
               </TooltipTrigger>
               <TooltipContent>
-                Clear date and filters, then load all tasks from HubSpot (any date, completed or not).
+                Remove priority and task status filters; keep current view (All, Today, This Week, etc.).
               </TooltipContent>
             </Tooltip>
             <Tooltip>
