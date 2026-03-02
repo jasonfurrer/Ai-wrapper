@@ -1397,6 +1397,15 @@ function ActivityPageContent(): React.ReactElement {
       {/* Left column - expands to fill space up to the right column (min 400px) */}
       <div className="flex-1 min-w-[400px] overflow-y-auto bg-surface border-r border-border">
         <div className="flex flex-col gap-4 p-4">
+        {/* Task title indicator when opened from Dashboard */}
+        {activityId && (
+          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task Title</p>
+            <p className="text-sm font-medium text-foreground mt-0.5 truncate" title={subject || undefined}>
+              {subject || '—'}
+            </p>
+          </div>
+        )}
         {/* 1. Note Editor */}
         <Card className="border-[1.5px]">
           <CardHeader className="pb-2">
