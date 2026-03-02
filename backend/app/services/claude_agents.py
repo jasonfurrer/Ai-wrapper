@@ -503,40 +503,56 @@ def generate_email_drafts(
 
     prompt = f"""You are an expert sales and relationship email writer. Your task is to generate three ready-to-send email drafts for the same situation, each in a different tone: **warm**, **concise**, and **formal**. You must also output a single **suggested_subject** line for the email.
 
-**Primary objective (you must respect this):**
-- The **task title** and **email draft instructions** together define the main objective of the email.
-- The task title is the *purpose* of the outreach in the CRM (e.g. "Check in with Acme Corp", "Follow-up on contract", "Send proposal"). The instructions add specifics: tone preferences, points to include, things to avoid, structure, or **a subject line**.
-- Example: if the task title is "Check in with Acme Corp" and instructions say "mention the Q2 proposal and ask for a 15-min call", the email must be a check-in that references the Q2 proposal and invites a 15-minute call. Do not write a generic follow-up if the objective is a check-in.
-- Both task title and instructions are mandatory context for what the email must achieve.
+---
+## 1. PRIORITY: Email draft instructions (highest authority)
+- The **email draft instructions** are the **highest priority** input. Treat them as the primary source of intent.
+- The user may refer to a **specific section** of the client notes (e.g. "use the latest note", "base this on the 2nd paragraph of the notes", "focus on what we agreed in the last call") or ask for a particular structure, tone, or content. **Follow those instructions exactly.** If instructions point to part of the client notes, use that part as the main evidence; do not drift to other sections unless the instructions allow it.
+- When instructions conflict with the task title or with general assumptions, **instructions always win.** Implement the instructions first; use task title and client notes to support that implementation, not to override it.
+- If instructions are empty, then use the task title and client notes as the sole source of objective and context.
 
-**Subject line (suggested_subject) — follow this order of precedence:**
-1. **If the email draft instructions explicitly mention or specify a subject line** (e.g. "subject: Follow-up on our call", "use subject: Q2 proposal attached", "email subject should be..."), use that as the suggested_subject. Extract or paraphrase exactly what the user asked for; do not substitute the task title unless it matches.
-2. **If the instructions do not specify a subject**, derive a subject from the **context of the current email**: the purpose of the email, the relationship (from client notes), and the main ask or topic. The subject should be concise (under ~60 characters when practical), clear, and specific to this email (e.g. "Quick follow-up on Q2 proposal", "Availability for a 15-min call next week", "Thank you – next steps").
-3. **Use the task title as the email subject only when** (a) it naturally reads as an email subject line (e.g. "Follow-up on contract", "Send proposal"), and (b) the instructions did not specify a subject and the task title accurately reflects the email content. Do NOT default to the task title when a more specific, context-derived subject is possible (e.g. task title "Check in with Acme Corp" → prefer a subject like "Checking in – Q2 proposal and next steps" over literally "Check in with Acme Corp" unless the user instructed otherwise).
+---
+## 2. NO ASSUMPTIONS — evidence from client notes only
+- **Do not assume anything about the contact** that is not explicitly stated or clearly implied in the **client notes**. If it is not in the notes, do not include it in the email body.
+- **Never assume:** the contact's schedule, availability, time zone, preferred meeting method (call vs video vs in-person), preferred time of day, or how they like to be contacted. Only reference these if they appear in the client notes.
+- **Never assume:** that the user will meet the contact in person, go to lunch, or schedule an in-person meeting **unless** the instructions or client notes explicitly mention it (e.g. "suggest lunch", "meet in person", "schedule an in-person visit"). If neither instructions nor notes mention in-person or lunch, do not include offers or references to lunch or in-person meetings in the drafts.
+- Every factual claim about the contact, the relationship, or next steps in the email must be **traceable to the client notes** (or to the instructions). If you cannot point to a specific phrase or clear implication in the notes, omit that claim from the draft.
+- If the recipient's name or other details are unknown from the notes, use "[Contact Name]" or neutral wording in the greeting only; do not invent names or details.
+
+---
+## 3. Primary objective (task title + instructions)
+- The **task title** is the CRM purpose of the outreach (e.g. "Check in with Acme Corp", "Follow-up on contract"). The **instructions** define specifics: what to include, what to avoid, which part of the notes to use, tone, structure, or subject line.
+- Both are mandatory context. When instructions are present, they take precedence over the task title for *what* to say; the task title still informs *why* the email exists. When instructions are absent, the task title and client notes alone define the objective.
+
+---
+## 4. Subject line (suggested_subject) — order of precedence
+1. **If the instructions explicitly specify a subject line** (e.g. "subject: Follow-up on our call", "use subject: Q2 proposal attached"), use that as suggested_subject. Extract or paraphrase exactly what the user asked for; do not substitute the task title unless it matches.
+2. **If the instructions do not specify a subject**, derive a subject from the email's purpose, relationship (from client notes only), and main ask or topic. Keep it concise (under ~60 characters when practical), clear, and specific.
+3. **Use the task title as the subject only when** (a) it reads naturally as an email subject, and (b) the instructions did not specify a subject and the task title accurately reflects the email content. Do not default to the task title when a more specific, context-derived subject is possible.
 Output the chosen subject in the **suggested_subject** field of your JSON.
 
-**Context you must use:**
-1. **Client notes** (below): Same notes used for the contact's communication history. Use them to:
-   - Pull relevant facts, commitments, and prior discussion points so the email is accurate and personalised.
-   - Reference specific details (e.g. "as we discussed on the call", "the timeline you mentioned") where they support the objective.
-   - Avoid inventing facts; only use information that appears in the notes.
-2. **Last touch date** (if provided): Use it to frame recency (e.g. "following up from our conversation on...", "it's been a few weeks since we last spoke").
+---
+## 5. Context you must use
+- **Client notes:** Use them for facts, commitments, and prior discussion points only. Reference specific details (e.g. "as we discussed on the call", "the timeline you mentioned") **only when they appear in the notes**. Do not invent or assume facts.
+- **Last touch date** (if provided): Use it only to frame recency (e.g. "following up from our conversation on...") where relevant.
 {sender_block}
 {last_touch_block}
 
-**Requirements for each draft:**
-- **Warm**: Friendly, personable, and relationship-oriented. Use a natural, conversational tone while remaining professional. Include an appropriate greeting and sign-off. Use the sender name in the sign-off when provided (no placeholders).
-- **Concise**: Short and to the point. Lead with the objective; minimal preamble. Clear sentences; bullets only if they add clarity. No filler. Get the ask or next step in early. Use the sender name in the sign-off when provided.
-- **Formal**: Professional, polished, suitable for senior or external stakeholders. Complete sentences, proper salutation and sign-off (e.g. "Dear [Contact Name]", "Best regards"). Avoid colloquialisms. Use the sender name in the sign-off when provided.
+---
+## 6. Requirements for each draft (tone only; content still evidence-based)
+- **Warm:** Friendly, personable, relationship-oriented. Natural, conversational, professional. Appropriate greeting and sign-off. Use the sender name in the sign-off when provided (no placeholders).
+- **Concise:** Short and to the point. Lead with the objective; minimal preamble. Clear sentences; bullets only if they add clarity. No filler. Use the sender name in the sign-off when provided.
+- **Formal:** Professional, polished, suitable for senior or external stakeholders. Complete sentences, proper salutation and sign-off. Avoid colloquialisms. Use the sender name in the sign-off when provided.
+In all three tones, **content must still respect sections 1 and 2**: instructions first, and no assumptions—only what is supported by client notes (and instructions).
 
-**Rules (strict):**
+---
+## 7. Output rules (strict)
 - Each draft must be a **complete email body** only (no subject line inside the body). Include a greeting and a sign-off in each draft.
 - **Sign-off:** When the sender name is provided, every draft must end with the actual sender name (e.g. "Best regards,\nJohn Smith"). Never use "[Your name]", "[Sender]", or similar when the sender name is given. When not provided, you may use a placeholder.
-- All three drafts must fulfil the **same objective** (task title + instructions); only the tone and length differ.
-- Do not make up names, dates, or facts not present in the client notes. If the recipient's name is unknown, use "[Contact Name]" or "there" in the greeting only.
+- All three drafts must fulfil the **same objective** (driven by instructions, then task title and notes); only the tone and length differ.
+- Do not make up names, dates, or facts. If the recipient's name is unknown, use "[Contact Name]" or "there" in the greeting only.
 - Output **only** valid JSON. No markdown code fences, no explanation. Use this exact structure (include suggested_subject at the top level):
 {{"suggested_subject": "<one subject line string>", "warm": {{"text": "<full email body>", "confidence": number}}, "concise": {{"text": "<full email body>", "confidence": number}}, "formal": {{"text": "<full email body>", "confidence": number}}}}
-- confidence: integer 0–100 per draft. 85+ when context clearly supports the draft; 70–84 when partial; 50–69 when thin but objective is clear; below 50 when inferring heavily.
+- **confidence:** integer 0–100 per draft. 85+ when instructions and client notes clearly support the draft; 70–84 when partial support; 50–69 when thin but objective is clear; below 50 when inferring or when assumptions would be required (prefer omitting unsupported content and scoring lower rather than inventing).
 
 ---
 **Task title (CRM purpose of the outreach; use for objective and only for subject when it fits per rules above):**
