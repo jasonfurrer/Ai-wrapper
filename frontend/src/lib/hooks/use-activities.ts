@@ -20,20 +20,21 @@ function sortActivities(
   sortBy: ActivitySortOption
 ): MockActivity[] {
   const copy = [...items];
+  const dueTs = (a: MockActivity) =>
+    a.dueDate ? new Date(a.dueDate + (a.dueDate.length === 10 ? 'T00:00:00' : '')).getTime() : 0;
+  const touchTs = (a: MockActivity) => new Date(a.lastTouchDate).getTime();
   switch (sortBy) {
-    case 'date_newest':
-      copy.sort(
-        (a, b) =>
-          new Date(b.lastTouchDate).getTime() -
-          new Date(a.lastTouchDate).getTime()
-      );
+    case 'due_date_oldest':
+      copy.sort((a, b) => dueTs(a) - dueTs(b) || touchTs(a) - touchTs(b));
       break;
-    case 'date_oldest':
-      copy.sort(
-        (a, b) =>
-          new Date(a.lastTouchDate).getTime() -
-          new Date(b.lastTouchDate).getTime()
-      );
+    case 'due_date_newest':
+      copy.sort((a, b) => dueTs(b) - dueTs(a) || touchTs(b) - touchTs(a));
+      break;
+    case 'last_touch_oldest':
+      copy.sort((a, b) => touchTs(a) - touchTs(b) || dueTs(a) - dueTs(b));
+      break;
+    case 'last_touch_newest':
+      copy.sort((a, b) => touchTs(b) - touchTs(a) || dueTs(b) - dueTs(a));
       break;
     case 'priority_high_low':
       copy.sort(

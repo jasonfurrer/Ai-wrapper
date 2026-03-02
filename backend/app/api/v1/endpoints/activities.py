@@ -179,22 +179,35 @@ def _apply_filters(
 
 
 def _apply_sort(activities: list[dict[str, Any]], sort: ActivitySortOption) -> list[dict[str, Any]]:
-    """Sort activities by sort option."""
+    """Sort activities by sort option (due date, last touch, or priority)."""
     key_priority = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "": 0}
+    min_ts = datetime.min.replace(tzinfo=timezone.utc).timestamp()
+    max_ts = datetime.max.replace(tzinfo=timezone.utc).timestamp()
+
+    def _ts(d: Any) -> float:
+        if d is None:
+            return min_ts
+        return d.timestamp() if hasattr(d, "timestamp") else min_ts
 
     def sort_key(a: dict[str, Any]):
-        if sort == "date_newest":
-            d = a.get("due_date") or a.get("created_at")
-            return (d is None, -(d.timestamp() if hasattr(d, "timestamp") else 0))
-        if sort == "date_oldest":
-            d = a.get("due_date") or a.get("created_at")
-            return (d is None, d.timestamp() if hasattr(d, "timestamp") else 0)
+        if sort == "due_date_newest":
+            d = a.get("due_date")
+            return (d is None, -(d.timestamp() if hasattr(d, "timestamp") else max_ts))
+        if sort == "due_date_oldest":
+            d = a.get("due_date")
+            return (d is None, _ts(d))
+        if sort == "last_touch_newest":
+            u = a.get("updated_at") or a.get("created_at")
+            return (-_ts(u), a.get("id", ""))
+        if sort == "last_touch_oldest":
+            u = a.get("updated_at") or a.get("created_at")
+            return (_ts(u), a.get("id", ""))
         if sort == "priority_high_low":
             p = key_priority.get((a.get("_priority") or "").upper(), 0)
-            return (-p, (a.get("due_date") or datetime.min.replace(tzinfo=timezone.utc)).timestamp() if a.get("due_date") else 0)
+            return (-p, _ts(a.get("due_date")))
         if sort == "priority_low_high":
             p = key_priority.get((a.get("_priority") or "").upper(), 0)
-            return (p, (a.get("due_date") or datetime.min.replace(tzinfo=timezone.utc)).timestamp() if a.get("due_date") else 0)
+            return (p, _ts(a.get("due_date")))
         return (0, a.get("id", ""))
 
     return sorted(activities, key=sort_key)
@@ -304,7 +317,7 @@ async def list_activities(
     processing_status: list[str] | None = Query(None, description="Filter by processing status"),
     date_from: str | None = Query(None, description="Start date for range (YYYY-MM-DD)"),
     date_to: str | None = Query(None, description="End date for range (YYYY-MM-DD)"),
-    sort: ActivitySortOption = Query("date_newest", description="Sort option"),
+    sort: ActivitySortOption = Query("due_date_oldest", description="Sort option"),
     search: str | None = Query(None, description="Search by keyword (subject, contact, company); fetches from HubSpot; returns completed and not completed"),
     supabase: SupabaseService = Depends(get_supabase_service),
     hubspot: HubSpotService = Depends(get_hubspot_service),

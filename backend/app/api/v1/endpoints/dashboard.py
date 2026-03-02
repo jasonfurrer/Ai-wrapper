@@ -15,7 +15,7 @@ from app.services.supabase_service import SupabaseService, get_supabase_service
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
-DEFAULT_SORT_OPTION = "date_newest"
+DEFAULT_SORT_OPTION = "due_date_oldest"
 
 
 def _today_yyyymmdd() -> str:

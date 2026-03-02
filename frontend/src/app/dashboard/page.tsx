@@ -113,8 +113,10 @@ export interface DashboardActivityItem {
 }
 
 export type SortOption =
-  | 'date_newest'
-  | 'date_oldest'
+  | 'due_date_newest'
+  | 'due_date_oldest'
+  | 'last_touch_newest'
+  | 'last_touch_oldest'
   | 'priority_high_low'
   | 'priority_low_high';
 
@@ -287,7 +289,7 @@ function loadDashboardStateFromStorage(): {
     if (!raw) return null;
     const data = JSON.parse(raw) as Record<string, unknown>;
     const filter = filterStateFromApi(data.filter_state as Record<string, unknown>);
-    const sort = (data.sort_option as SortOption) || 'date_newest';
+    const sort = normalizeSortOption(data.sort_option);
     const hasDateRange = !!(filter.dateFrom || filter.dateTo);
     const datePickerValue = hasDateRange
       ? ''
@@ -354,34 +356,54 @@ function isDateInRange(iso: string, from: string, to: string): boolean {
   return true;
 }
 
-const SORT_OPTIONS: { value: SortOption; label: string; dateOnly?: boolean }[] = [
-  { value: 'date_newest', label: 'Date Newest', dateOnly: true },
-  { value: 'date_oldest', label: 'Date Oldest', dateOnly: true },
+const SORT_OPTIONS: { value: SortOption; label: string }[] = [
+  { value: 'due_date_oldest', label: 'Due date (soonest first)' },
+  { value: 'due_date_newest', label: 'Due date (latest first)' },
+  { value: 'last_touch_oldest', label: 'Last touch (oldest first)' },
+  { value: 'last_touch_newest', label: 'Last touch (newest first)' },
   { value: 'priority_high_low', label: 'Priority High to Low' },
   { value: 'priority_low_high', label: 'Priority Low to High' },
 ];
 
 const PRIORITY_ORDER: Record<string, number> = { high: 3, medium: 2, low: 1, none: 0 };
 
+const VALID_SORT_OPTIONS: SortOption[] = [
+  'due_date_newest',
+  'due_date_oldest',
+  'last_touch_newest',
+  'last_touch_oldest',
+  'priority_high_low',
+  'priority_low_high',
+];
+
+function normalizeSortOption(value: unknown): SortOption {
+  if (typeof value === 'string' && VALID_SORT_OPTIONS.includes(value as SortOption))
+    return value as SortOption;
+  if (value === 'date_newest') return 'last_touch_newest';
+  if (value === 'date_oldest') return 'last_touch_oldest';
+  return 'due_date_oldest';
+}
+
 function sortActivities(
   items: DashboardActivityItem[],
   sort: SortOption
 ): DashboardActivityItem[] {
   const copy = [...items];
+  const dueTs = (a: DashboardActivityItem) =>
+    a.activity.dueDate ? new Date(a.activity.dueDate + (a.activity.dueDate.length === 10 ? 'T00:00:00' : '')).getTime() : 0;
+  const touchTs = (a: DashboardActivityItem) => new Date(a.activity.lastTouchDate).getTime();
   switch (sort) {
-    case 'date_newest':
-      copy.sort(
-        (a, b) =>
-          new Date(b.activity.lastTouchDate).getTime() -
-          new Date(a.activity.lastTouchDate).getTime()
-      );
+    case 'due_date_oldest':
+      copy.sort((a, b) => dueTs(a) - dueTs(b) || touchTs(a) - touchTs(b));
       break;
-    case 'date_oldest':
-      copy.sort(
-        (a, b) =>
-          new Date(a.activity.lastTouchDate).getTime() -
-          new Date(b.activity.lastTouchDate).getTime()
-      );
+    case 'due_date_newest':
+      copy.sort((a, b) => dueTs(b) - dueTs(a) || touchTs(b) - touchTs(a));
+      break;
+    case 'last_touch_oldest':
+      copy.sort((a, b) => touchTs(a) - touchTs(b) || dueTs(a) - dueTs(b));
+      break;
+    case 'last_touch_newest':
+      copy.sort((a, b) => touchTs(b) - touchTs(a) || dueTs(b) - dueTs(a));
       break;
     case 'priority_high_low':
       copy.sort(
@@ -496,7 +518,7 @@ function stateFromCacheOrDefaults(cached: DashboardState | undefined): {
   if (!cached) {
     return {
       filter: DEFAULT_FILTER,
-      sort: 'date_newest',
+      sort: 'due_date_oldest',
       datePickerValue: getTodayDateString(),
       selectedActivityId: null,
     };
@@ -506,7 +528,7 @@ function stateFromCacheOrDefaults(cached: DashboardState | undefined): {
   const datePickerValue = hasDateRange ? '' : (cached.date_picker_value ?? getTodayDateString());
   return {
     filter,
-    sort: (cached.sort_option as SortOption) || 'date_newest',
+    sort: normalizeSortOption(cached.sort_option),
     datePickerValue,
     selectedActivityId: typeof cached.selected_activity_id === 'string' ? cached.selected_activity_id : null,
   };
@@ -596,7 +618,7 @@ export default function DashboardPage(): React.ReactElement {
     const state = dashboardStateQuery.data;
     if (!state || hasUserInteractedRef.current) return;
     weJustAppliedServerStateRef.current = true;
-    setSort((state.sort_option as SortOption) || 'date_newest');
+    setSort(normalizeSortOption(state.sort_option));
     const filter = filterStateFromApi(state.filter_state as Record<string, unknown>);
     setFilterApplied(filter);
     setFilterDraft(filter);
@@ -783,16 +805,6 @@ export default function DashboardPage(): React.ReactElement {
     filterApplied.dateTo === ALL_TASKS_DATE_TO &&
     filterApplied.priority.length === 0 &&
     filterApplied.taskStatus.length === 0;
-
-  /** Date Newest / Date Oldest are only available when showing all tasks (no date filter). */
-  const dateSortsAllowed = isShowingAllTasks;
-
-  // When a date filter is applied and current sort is a date sort, switch to priority
-  React.useEffect(() => {
-    if (!dateSortsAllowed && (sort === 'date_newest' || sort === 'date_oldest')) {
-      setSort('priority_high_low');
-    }
-  }, [dateSortsAllowed, sort]);
 
   const hasActiveFilters =
     !isShowingAllTasks &&
@@ -1697,13 +1709,8 @@ export default function DashboardPage(): React.ReactElement {
               </SelectTrigger>
               <SelectContent>
                 {SORT_OPTIONS.map((opt) => (
-                  <SelectItem
-                    key={opt.value}
-                    value={opt.value}
-                    disabled={opt.dateOnly ? !dateSortsAllowed : undefined}
-                  >
+                  <SelectItem key={opt.value} value={opt.value}>
                     {opt.label}
-                    {opt.dateOnly && !dateSortsAllowed ? ' (all tasks only)' : ''}
                   </SelectItem>
                 ))}
               </SelectContent>

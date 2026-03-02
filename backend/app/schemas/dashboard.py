@@ -23,7 +23,7 @@ DashboardSortOption = str  # e.g. date_newest, date_oldest, etc.
 class DashboardStateResponse(BaseModel):
     """Response for GET /dashboard/state."""
     selected_activity_id: str | None = None
-    sort_option: str = "date_newest"
+    sort_option: str = "due_date_oldest"
     filter_state: dict[str, Any] = {}
     date_picker_value: str | None = None
     updated_at: datetime | None = None

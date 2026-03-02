@@ -87,7 +87,7 @@ export async function getDashboardState(): Promise<DashboardState> {
     });
     return {
       selected_activity_id: data.selected_activity_id ?? null,
-      sort_option: data.sort_option ?? 'date_newest',
+      sort_option: data.sort_option ?? 'due_date_oldest',
       filter_state: data.filter_state ?? {},
       date_picker_value: data.date_picker_value ?? null,
       updated_at: data.updated_at ?? null,
@@ -140,7 +140,7 @@ export async function updateDashboardState(
     });
     return {
       selected_activity_id: data.selected_activity_id ?? null,
-      sort_option: data.sort_option ?? 'date_newest',
+      sort_option: data.sort_option ?? 'due_date_oldest',
       filter_state: data.filter_state ?? {},
       date_picker_value: data.date_picker_value ?? null,
       updated_at: data.updated_at ?? null,

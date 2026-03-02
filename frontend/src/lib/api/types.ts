@@ -8,8 +8,10 @@
 // -----------------------------------------------------------------------------
 
 export type ActivitySortOption =
-  | 'date_newest'
-  | 'date_oldest'
+  | 'due_date_newest'
+  | 'due_date_oldest'
+  | 'last_touch_newest'
+  | 'last_touch_oldest'
   | 'priority_high_low'
   | 'priority_low_high';
 

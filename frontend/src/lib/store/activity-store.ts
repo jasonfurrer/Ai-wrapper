@@ -7,8 +7,10 @@ import {
 } from '@/lib/mock-data';
 
 export type ActivitySortOption =
-  | 'date_newest'
-  | 'date_oldest'
+  | 'due_date_newest'
+  | 'due_date_oldest'
+  | 'last_touch_newest'
+  | 'last_touch_oldest'
   | 'priority_high_low'
   | 'priority_low_high';
 
@@ -43,7 +45,7 @@ export const useActivityStore = create<ActivityState>((set) => ({
   activities: [...mockActivities],
   selectedActivity: null,
   filters: defaultFilters,
-  sortBy: 'date_newest',
+  sortBy: 'due_date_oldest',
 
   setSelectedActivity: (selectedActivity) => set({ selectedActivity }),
 

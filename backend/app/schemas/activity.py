@@ -9,8 +9,10 @@ from pydantic import BaseModel, ConfigDict
 
 # Sort options for activity list
 ActivitySortOption = Literal[
-    "date_newest",
-    "date_oldest",
+    "due_date_newest",
+    "due_date_oldest",
+    "last_touch_newest",
+    "last_touch_oldest",
     "priority_high_low",
     "priority_low_high",
 ]

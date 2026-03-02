@@ -556,7 +556,7 @@ class SupabaseService:
             row: Dict[str, Any] = {
                 "user_id": user_id,
                 "selected_activity_id": existing.get("selected_activity_id") if existing else None,
-                "sort_option": (existing.get("sort_option") or "date_newest") if existing else "date_newest",
+                "sort_option": (existing.get("sort_option") or "due_date_oldest") if existing else "due_date_oldest",
                 "filter_state": (existing.get("filter_state") or {}) if existing else {},
                 "date_picker_value": existing.get("date_picker_value") if existing else None,
             }
