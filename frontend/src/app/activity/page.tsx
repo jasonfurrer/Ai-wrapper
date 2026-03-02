@@ -6,7 +6,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import {
   Sparkles,
-  AlertTriangle,
   RotateCw,
   Mail,
   User,
@@ -495,9 +494,12 @@ interface EmailSnapshotForActivity {
 function ImportFromCommunicationSection({
   onUseExtractedData,
   onNoteGenerated,
+  refreshTrigger,
 }: {
   onUseExtractedData: (data: ExtractedContact, emailSnapshot: EmailSnapshotForActivity) => void;
   onNoteGenerated: (note: string) => void;
+  /** When this value changes, the section refetches latest emails (e.g. after user sends an email). */
+  refreshTrigger?: number;
 }): React.ReactElement {
   const [emailSearchQuery, setEmailSearchQuery] = React.useState('');
   const [emailSearchFolder, setEmailSearchFolder] = React.useState<GmailSearchFolder>('all');
@@ -518,7 +520,7 @@ function ImportFromCommunicationSection({
   const [noteError, setNoteError] = React.useState<string | null>(null);
   const debouncedEmailQuery = useDebouncedValue(emailSearchQuery.trim(), 400);
 
-  // Load latest emails on mount and when date filter changes (no search query) so the results section is pre-populated.
+  // Load latest emails on mount, when date filter changes, or when refreshTrigger changes (e.g. after sending an email).
   React.useEffect(() => {
     let cancelled = false;
     setInitialRecentLoading(true);
@@ -533,7 +535,16 @@ function ImportFromCommunicationSection({
         if (!cancelled) setInitialRecentLoading(false);
       });
     return () => { cancelled = true; };
-  }, [emailSearchDate]);
+  }, [emailSearchDate, refreshTrigger]);
+
+  // When refreshTrigger fires, invalidate search cache so the next view shows fresh data.
+  React.useEffect(() => {
+    if (refreshTrigger != null && refreshTrigger > 0) {
+      setEmailSearchFullCache(null);
+      setEmailSearchFullCacheQuery('');
+      setEmailSearchFullCacheDate('');
+    }
+  }, [refreshTrigger]);
 
   // When there is no search query, show initial recent emails (filtered by All/Inbox/Sent).
   React.useEffect(() => {
@@ -885,6 +896,7 @@ function ActivityPageContent(): React.ReactElement {
   const [composeSubject, setComposeSubject] = React.useState('');
   const [composeBody, setComposeBody] = React.useState('');
   const [suggestedSubjectFromDrafts, setSuggestedSubjectFromDrafts] = React.useState('');
+  const [importSectionRefreshTrigger, setImportSectionRefreshTrigger] = React.useState(0);
   const [toast, setToast] = React.useState<{ open: boolean; variant: 'success' | 'error'; title: string; description?: string }>({
     open: false,
     variant: 'success',
@@ -1044,14 +1056,6 @@ function ActivityPageContent(): React.ReactElement {
       });
     return () => { cancelled = true; };
   }, [activityId]);
-
-  const lowConfidenceFields = React.useMemo(() => {
-    const list: string[] = [];
-    if (subjectConfidence > 0 && subjectConfidence < LOW_CONFIDENCE_THRESHOLD) list.push('Task Title');
-    return list;
-  }, [subjectConfidence]);
-
-  const showErrorBanner = lowConfidenceFields.length > 0 && processingStep === 'ready';
 
   const DRAFT_SAVE_DEBOUNCE_MS = 600;
   const latestDraftRef = React.useRef<ActivityDraftStored | null>(null);
@@ -1391,6 +1395,7 @@ function ActivityPageContent(): React.ReactElement {
       await gmailSendEmail({ to: toAddr, subject: subj, body: composeBody });
       showToast('success', 'Email sent', 'Your message was sent successfully.');
       setEmailComposeOpen(false);
+      setImportSectionRefreshTrigger((t) => t + 1);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to send email.';
       showToast('error', 'Send failed', message);
@@ -1551,6 +1556,7 @@ function ActivityPageContent(): React.ReactElement {
         <ImportFromCommunicationSection
           onUseExtractedData={handleUseExtractedDataFromImport}
           onNoteGenerated={(note) => setNoteContent(note)}
+          refreshTrigger={importSectionRefreshTrigger}
         />
 
         {/* 3. Contact & Account */}
@@ -1808,22 +1814,7 @@ function ActivityPageContent(): React.ReactElement {
           </CardContent>
         </Card>
 
-        {/* 2. Error Banner - only when low confidence fields */}
-        {showErrorBanner && (
-          <Card className="border-[1.5px] border-status-at-risk/50 bg-status-at-risk/10">
-            <CardContent className="flex gap-3 py-4">
-              <AlertTriangle className="h-5 w-5 text-status-at-risk shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium text-status-at-risk">Low confidence detected</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Review and correct: {lowConfidenceFields.join(', ')}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* 3. Dates (Activity Date + Due Date) */}
+        {/* 2. Dates (Activity Date + Due Date) */}
         <Card className="border-[1.5px]">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg font-semibold">Dates</CardTitle>
