@@ -668,19 +668,19 @@ export default function DashboardPage(): React.ReactElement {
 
   // Activities from API (cached by React Query – instant when navigating back).
   // When search is set: backend fetches from HubSpot by keyword (all statuses). Otherwise: date/range filters.
+  // Sort is intentionally excluded so changing sort only reorders already-loaded tasks client-side (no refetch).
   const activitiesParams = React.useMemo(
     () => {
       if (isSearchMode) {
-        return { sort: sort as ActivitySortOption, search: debouncedSearchQuery };
+        return { search: debouncedSearchQuery };
       }
       return {
-        sort: sort as ActivitySortOption,
         date: datePickerValue || undefined,
         date_from: datePickerValue ? undefined : (filterApplied.dateFrom || undefined),
         date_to: datePickerValue ? undefined : (filterApplied.dateTo || undefined),
       };
     },
-    [sort, datePickerValue, filterApplied, isSearchMode, debouncedSearchQuery]
+    [datePickerValue, filterApplied, isSearchMode, debouncedSearchQuery]
   );
 
   const activitiesQuery = useQuery({
@@ -791,9 +791,9 @@ export default function DashboardPage(): React.ReactElement {
         if (isCompleted && !wantCompleted) return false;
         if (!isCompleted && !wantNotCompleted) return false;
       }
-      // When search is active, show all search matches regardless of date; user can narrow with other filters
-      if (!isSearchMode && !isDateInRange(a.lastTouchDate, filterApplied.dateFrom, filterApplied.dateTo))
-        return false;
+      // Do not filter by lastTouchDate here: API already filters by due_date (single date or range).
+      // Applying lastTouchDate to the same range would incorrectly hide tasks that are due in range
+      // but were last modified outside the range (e.g. due this week, last touched last month).
       return true;
     });
   }, [filteredByDate, filterApplied, completedIds, isSearchMode]);
