@@ -347,7 +347,8 @@ async def list_activities(
         activities: list[dict[str, Any]] = []
 
         if search and search.strip():
-            # Keyword search: fetch from HubSpot (all statuses, completed + not completed)
+            # Search: (1) task title/subject/body via HubSpot search_tasks; (2) contact name via search_contacts + task associations.
+            # No date or status filters applied; returns all matching tasks (completed and not completed).
             search_results: list[dict[str, Any]] = []
             after: str | None = None
             while True:
@@ -364,7 +365,24 @@ async def list_activities(
                 if not after or not results:
                     break
 
-            task_ids = [r.get("id") for r in search_results if r.get("id")]
+            task_ids_from_text = [str(r.get("id")) for r in search_results if r.get("id")]
+            # Also find tasks linked to contacts matching the search (contact name search)
+            contact_matched_task_ids: list[str] = []
+            try:
+                contact_search_resp = hubspot.search_contacts(search.strip(), limit=100)
+                contact_results = contact_search_resp.get("results") or []
+                contact_ids = [str(c.get("id")) for c in contact_results if c.get("id")]
+                if contact_ids:
+                    contact_matched_task_ids = hubspot.batch_read_contact_task_ids(contact_ids)
+            except Exception:  # noqa: BLE001
+                pass
+            # Merge and dedupe (preserve order: text matches first, then contact-linked)
+            seen: set[str] = set()
+            task_ids: list[str] = []
+            for tid in task_ids_from_text + contact_matched_task_ids:
+                if tid and tid not in seen:
+                    seen.add(tid)
+                    task_ids.append(tid)
             for i in range(0, len(task_ids), 100):
                 chunk = task_ids[i : i + 100]
                 try:
@@ -375,8 +393,10 @@ async def list_activities(
                     for t in full_tasks:
                         activities.append(_hubspot_task_to_activity(t))
                 except HubSpotServiceError:
+                    chunk_set = set(chunk)
                     for r in search_results:
-                        if r.get("id") in chunk:
+                        rid = r.get("id")
+                        if rid is not None and str(rid) in chunk_set:
                             activities.append(_hubspot_task_to_activity(r))
 
             task_to_contacts: dict[str, list[str]] = {}

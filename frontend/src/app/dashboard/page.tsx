@@ -778,6 +778,8 @@ export default function DashboardPage(): React.ReactElement {
   }, [activities, datePickerValue, filterApplied.dateFrom, filterApplied.dateTo]);
 
   const filtered = React.useMemo(() => {
+    // When searching by contact/task name, show all matching tasks regardless of filters
+    if (isSearchMode) return filteredByDate;
     return filteredByDate.filter((item) => {
       const a = item.activity;
       if (filterApplied.priority.length > 0) {

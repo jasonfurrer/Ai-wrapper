@@ -772,6 +772,41 @@ class HubSpotService:
             return [str(r.get("toObjectId") or r.get("id") or r) for r in data if isinstance(r, dict) and (r.get("toObjectId") or r.get("id"))]
         return []
 
+    def batch_read_contact_task_ids(self, contact_ids: list[str]) -> list[str]:
+        """
+        Get all task IDs associated with the given contacts (v4 associations API).
+        POST /crm/v4/associations/contacts/tasks/batch/read. Returns deduplicated list of task IDs.
+        """
+        if not contact_ids:
+            return []
+        all_task_ids: list[str] = []
+        for i in range(0, len(contact_ids), 100):
+            chunk = contact_ids[i : i + 100]
+            body: dict[str, Any] = {
+                "inputs": [{"id": cid} for cid in chunk],
+            }
+            try:
+                data = self._request(
+                    "POST",
+                    "/crm/v4/associations/contacts/tasks/batch/read",
+                    json=body,
+                )
+            except HubSpotServiceError:
+                raise
+            except Exception as e:
+                raise HubSpotServiceError(
+                    f"Failed to batch read contact-task associations: {e!s}"
+                ) from e
+            results = data.get("results", []) if isinstance(data, dict) else []
+            for r in results:
+                to_list = r.get("to") or []
+                for t in to_list:
+                    if isinstance(t, dict):
+                        oid = t.get("toObjectId") or t.get("id")
+                        if oid is not None:
+                            all_task_ids.append(str(oid))
+        return list(dict.fromkeys(all_task_ids))
+
     def batch_read_contact_company_ids(self, contact_ids: list[str]) -> dict[str, str]:
         """
         Batch read contact->company associations. Returns dict contact_id -> first company_id.
