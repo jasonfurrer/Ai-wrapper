@@ -20,8 +20,10 @@ import {
   FileText,
   CalendarIcon,
   Loader2,
+  CalendarDays,
+  AlertCircle,
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, startOfWeek, endOfWeek, subDays } from 'date-fns';
 import { Calendar } from '@/components/ui/calendar';
 import {
   Popover,
@@ -413,6 +415,25 @@ function getTodayDateString(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/** Yesterday as YYYY-MM-DD for Overdue view (due before today). */
+function getYesterdayDateString(): string {
+  const d = subDays(new Date(), 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** This calendar week (Monday–Sunday) as YYYY-MM-DD range. */
+function getThisWeekRange(): { from: string; to: string } {
+  const now = new Date();
+  const start = startOfWeek(now, { weekStartsOn: 1 });
+  const end = endOfWeek(now, { weekStartsOn: 1 });
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { from: fmt(start), to: fmt(end) };
+}
+
+/** Quick view presets: Today, Overdue, This Week */
+const QUICK_VIEW_OVERDUE_DATE_FROM = '1970-01-01';
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -777,6 +798,75 @@ export default function DashboardPage(): React.ReactElement {
     setFilterDialogOpen(false);
   };
 
+  /** Quick views: set filter + date to standard presets (no conflicts with existing filter architecture). */
+  const handleQuickViewToday = () => {
+    setFilterApplied(DEFAULT_FILTER);
+    setFilterDraft(DEFAULT_FILTER);
+    setDatePickerValue(getTodayDateString());
+    setFilterDialogOpen(false);
+  };
+  const handleQuickViewOverdue = () => {
+    const yesterday = getYesterdayDateString();
+    const filter: FilterState = {
+      ...DEFAULT_FILTER,
+      dateFrom: QUICK_VIEW_OVERDUE_DATE_FROM,
+      dateTo: yesterday,
+      taskStatus: ['not_completed'],
+    };
+    setFilterApplied(filter);
+    setFilterDraft(filter);
+    setDatePickerValue('');
+    setFilterDialogOpen(false);
+  };
+  const handleQuickViewThisWeek = () => {
+    const { from, to } = getThisWeekRange();
+    const filter: FilterState = {
+      ...DEFAULT_FILTER,
+      dateFrom: from,
+      dateTo: to,
+    };
+    setFilterApplied(filter);
+    setFilterDraft(filter);
+    setDatePickerValue('');
+    setFilterDialogOpen(false);
+  };
+
+  /** Which quick view is active (for highlighting). Derived from current filter + date. */
+  const activeQuickView = React.useMemo(() => {
+    const today = getTodayDateString();
+    const yesterday = getYesterdayDateString();
+    const week = getThisWeekRange();
+    if (
+      datePickerValue === today &&
+      !filterApplied.dateFrom &&
+      !filterApplied.dateTo &&
+      filterApplied.priority.length === 0 &&
+      filterApplied.taskStatus.length === 0
+    ) {
+      return 'today' as const;
+    }
+    if (
+      !datePickerValue &&
+      filterApplied.dateFrom === QUICK_VIEW_OVERDUE_DATE_FROM &&
+      filterApplied.dateTo === yesterday &&
+      filterApplied.taskStatus.length === 1 &&
+      filterApplied.taskStatus[0] === 'not_completed' &&
+      filterApplied.priority.length === 0
+    ) {
+      return 'overdue' as const;
+    }
+    if (
+      !datePickerValue &&
+      filterApplied.dateFrom === week.from &&
+      filterApplied.dateTo === week.to &&
+      filterApplied.priority.length === 0 &&
+      filterApplied.taskStatus.length === 0
+    ) {
+      return 'this_week' as const;
+    }
+    return null;
+  }, [datePickerValue, filterApplied]);
+
   const handleOpen = React.useCallback(
     (activity: ActivityCardActivity) => {
       const item = activities.find((i) => i.activity.id === activity.id);
@@ -1040,6 +1130,72 @@ export default function DashboardPage(): React.ReactElement {
       <div className="flex-1 min-h-0 grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-12 lg:items-stretch">
         {/* Left panel - Activity cards (6 cols on desktop), only this section scrolls */}
         <section className="flex flex-col min-h-0 lg:col-span-6 lg:flex-1 lg:overflow-hidden rounded-lg bg-section border border-border p-4">
+          {/* Quick view presets: Today, Overdue, This Week */}
+          <div className="flex flex-wrap items-center gap-2 shrink-0 mb-4">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={activeQuickView === 'today' ? 'secondary' : 'outline'}
+                  size="sm"
+                  className={cn(
+                    'h-9 gap-1.5 shrink-0',
+                    activeQuickView === 'today' && 'ring-2 ring-primary/50'
+                  )}
+                  onClick={handleQuickViewToday}
+                  aria-pressed={activeQuickView === 'today'}
+                  aria-label="Show today's tasks"
+                >
+                  <CalendarIcon className="h-4 w-4 shrink-0" />
+                  Today
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Show tasks due today ({format(new Date(), 'dd MMM yyyy')})
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={activeQuickView === 'this_week' ? 'secondary' : 'outline'}
+                  size="sm"
+                  className={cn(
+                    'h-9 gap-1.5 shrink-0',
+                    activeQuickView === 'this_week' && 'ring-2 ring-primary/50'
+                  )}
+                  onClick={handleQuickViewThisWeek}
+                  aria-pressed={activeQuickView === 'this_week'}
+                  aria-label="Show this week's tasks"
+                >
+                  <CalendarDays className="h-4 w-4 shrink-0" />
+                  This Week
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Show tasks for this calendar week (Mon–Sun)
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={activeQuickView === 'overdue' ? 'secondary' : 'outline'}
+                  size="sm"
+                  className={cn(
+                    'h-9 gap-1.5 shrink-0',
+                    activeQuickView === 'overdue' && 'ring-2 ring-primary/50'
+                  )}
+                  onClick={handleQuickViewOverdue}
+                  aria-pressed={activeQuickView === 'overdue'}
+                  aria-label="Show overdue tasks"
+                >
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  Overdue
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Show incomplete tasks with due dates before today
+              </TooltipContent>
+            </Tooltip>
+          </div>
           {/* Activity search bar - search by title, contact, or company */}
           <div className="relative shrink-0 mb-3 w-full min-w-0">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" aria-hidden />
