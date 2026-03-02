@@ -181,7 +181,8 @@ function apiActivityToDashboardItem(api: DashboardActivity): DashboardActivityIt
   const contactName = contact
     ? [contact.first_name, contact.last_name].filter(Boolean).join(' ') || contact.email || 'Unknown'
     : 'Unknown';
-  const lastTouch = api.due_date ?? api.updated_at ?? api.created_at ?? new Date().toISOString();
+  /** Last touch = last modified (HubSpot updatedAt / hs_lastmodifieddate) */
+  const lastTouch = api.updated_at ?? api.created_at ?? new Date().toISOString();
   const rawSubject = api.subject ?? 'Untitled';
   const rawBody = api.body ?? '';
   const priority = (api.priority === 'low' || api.priority === 'medium' || api.priority === 'high' || api.priority === 'none')
@@ -193,6 +194,7 @@ function apiActivityToDashboardItem(api: DashboardActivity): DashboardActivityIt
     accountName: contact?.company_name ?? company?.name ?? '',
     subject: stripHtml(rawSubject),
     noteExcerpt: stripHtml(rawBody),
+    dueDate: api.due_date ?? null,
     lastTouchDate: lastTouch,
     relationshipStatus: 'Active',
     priority: priority ?? 'none',

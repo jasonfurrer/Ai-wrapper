@@ -97,12 +97,16 @@ def _parse_ts(value: str | int | None) -> datetime | None:
 
 
 def _hubspot_task_to_activity(task: dict[str, Any]) -> dict[str, Any]:
-    """Transform a HubSpot task object to our activity format."""
+    """Transform a HubSpot task object to our activity format.
+    due_date = task due date (hs_timestamp).
+    updated_at = last modified / last touch (HubSpot updatedAt or hs_lastmodifieddate).
+    """
     tid = task.get("id") or ""
     props = task.get("properties") or {}
-    created = task.get("createdAt")
-    updated = task.get("updatedAt")
     due = _parse_ts(props.get(HS_TIMESTAMP))
+    # Last touch = last modified: root updatedAt or property hs_lastmodifieddate
+    updated = _parse_ts(task.get("updatedAt")) or _parse_ts(props.get("hs_lastmodifieddate"))
+    created = _parse_ts(task.get("createdAt")) or _parse_ts(props.get("hs_createdate"))
     status_val = (props.get(HS_STATUS) or "").upper()
     completed = status_val == "COMPLETED"
     # Contact/company IDs from associations if present

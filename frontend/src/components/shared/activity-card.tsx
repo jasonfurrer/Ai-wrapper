@@ -1,11 +1,22 @@
 'use client';
 
 import * as React from 'react';
-import { ExternalLink, Check } from 'lucide-react';
+import { format, parseISO } from 'date-fns';
+import { ExternalLink, Check, Calendar, Clock } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { type RelationshipStatus } from '@/components/shared/status-chip';
 import { cn } from '@/lib/utils';
+
+function formatDateForCard(iso: string): string {
+  if (!iso) return '—';
+  try {
+    const normalized = iso.length === 10 ? `${iso}T00:00:00` : iso;
+    return format(parseISO(normalized), 'MMM d, yyyy');
+  } catch {
+    return iso;
+  }
+}
 
 export type PriorityLevel = 'none' | 'low' | 'medium' | 'high';
 
@@ -15,6 +26,9 @@ export interface ActivityCardActivity {
   accountName: string;
   subject: string;
   noteExcerpt: string;
+  /** Task due date (from HubSpot hs_timestamp) */
+  dueDate?: string | null;
+  /** Last modified / last touch (from HubSpot updatedAt or hs_lastmodifieddate) */
   lastTouchDate: string;
   relationshipStatus: RelationshipStatus;
   /** Priority from HubSpot; shown on card */
@@ -116,6 +130,20 @@ const ActivityCard = React.forwardRef<HTMLDivElement, ActivityCardProps>(
           <p className="text-sm font-medium text-foreground line-clamp-2">
             {activity.subject || '—'}
           </p>
+
+          {/* Due date and Last touch date */}
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {activity.dueDate && (
+              <div className="flex items-center gap-1.5">
+                <Calendar className="h-3.5 w-3 shrink-0" aria-hidden />
+                <span>Due: {formatDateForCard(activity.dueDate)}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3 shrink-0" aria-hidden />
+              <span>Last touch: {formatDateForCard(activity.lastTouchDate)}</span>
+            </div>
+          </div>
 
           {/* Action buttons row */}
           <div
