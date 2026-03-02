@@ -109,3 +109,39 @@ export async function gmailGenerateActivityNote(messageId: string): Promise<Gene
   }
   return res.json() as Promise<GenerateActivityNoteResponse>;
 }
+
+export interface GmailSendRequest {
+  to: string;
+  subject: string;
+  body: string;
+}
+
+export interface GmailSendResponse {
+  id: string;
+  message: string;
+}
+
+export async function gmailSendEmail(data: GmailSendRequest): Promise<GmailSendResponse> {
+  const headers = await getAuthHeaders();
+  const res = await fetch(buildApiUrl('/api/v1/gmail/send'), {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      to: data.to.trim(),
+      subject: data.subject.trim(),
+      body: data.body,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail: string | Record<string, unknown> = text || res.statusText;
+    try {
+      const json = JSON.parse(text) as { detail?: string };
+      if (json.detail) detail = json.detail;
+    } catch {
+      // use text
+    }
+    throw new ApiClientError(res.statusText, res.status, detail);
+  }
+  return res.json() as Promise<GmailSendResponse>;
+}

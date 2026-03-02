@@ -194,7 +194,10 @@ async def update_password(
 # Gmail OAuth
 # ---------------------------------------------------------------------------
 
-GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 
 
 @router.get("/gmail/status")
@@ -253,7 +256,7 @@ async def gmail_connect(
                 "redirect_uris": [settings.google_redirect_uri],
             }
         },
-        scopes=[GMAIL_SCOPE],
+        scopes=GMAIL_SCOPES,
     )
     flow.redirect_uri = settings.google_redirect_uri
     authorization_url, _ = flow.authorization_url(
@@ -309,7 +312,7 @@ async def gmail_callback(
                 "redirect_uris": [settings.google_redirect_uri],
             }
         },
-        scopes=[GMAIL_SCOPE],
+        scopes=GMAIL_SCOPES,
     )
     flow.redirect_uri = settings.google_redirect_uri
     try:

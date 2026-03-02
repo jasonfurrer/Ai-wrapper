@@ -17,8 +17,10 @@ from app.services.supabase_service import SupabaseService
 
 logger = logging.getLogger(__name__)
 
-# Gmail read-only scope
+# Gmail scopes: read and send (required for Smart compose send)
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GMAIL_SCOPES = [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE]
 
 
 def _parse_token_expiry_from_db(value: Optional[str]) -> Optional[datetime]:
@@ -63,7 +65,7 @@ def _credentials_from_tokens(
         token_uri="https://oauth2.googleapis.com/token",
         client_id=client_id,
         client_secret=client_secret,
-        scopes=[GMAIL_READONLY_SCOPE],
+        scopes=GMAIL_SCOPES,
     )
     if token_expiry:
         creds.expiry = _ensure_utc_aware(token_expiry)

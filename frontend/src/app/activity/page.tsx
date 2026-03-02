@@ -77,10 +77,12 @@ import {
   gmailSearchEmails,
   gmailExtractContact,
   gmailGenerateActivityNote,
+  gmailSendEmail,
   type GmailSearchMessage,
   type ExtractedContact,
   type GmailSearchFolder,
 } from '@/lib/api/gmail';
+import { getGmailStatus } from '@/lib/api/integrations';
 
 const DEBOUNCE_MS = 300;
 
@@ -872,6 +874,7 @@ function ActivityPageContent(): React.ReactElement {
   const [commSummaryError, setCommSummaryError] = React.useState<string | null>(null);
   const [processConfirmOpen, setProcessConfirmOpen] = React.useState(false);
   const [emailComposeOpen, setEmailComposeOpen] = React.useState(false);
+  const [composeSending, setComposeSending] = React.useState(false);
   const [generateDraftsLoading, setGenerateDraftsLoading] = React.useState(false);
   const [generateDraftsError, setGenerateDraftsError] = React.useState<string | null>(null);
   const [composeTo, setComposeTo] = React.useState('');
@@ -1356,14 +1359,39 @@ function ActivityPageContent(): React.ReactElement {
     formal: 'Formal',
     warm: 'Warm',
   };
-  const openEmailCompose = (tone: SmartComposeTone) => {
+  const openEmailCompose = async (tone: SmartComposeTone) => {
     const draft = drafts[tone];
     const bodyText = draft?.text ?? '';
     setComposeTo(selectedContact?.email ?? '');
-    setComposeFrom('');
     setComposeSubject(subject || '');
     setComposeBody(bodyText);
+    try {
+      const status = await getGmailStatus();
+      setComposeFrom(status.connected && status.email ? status.email : '');
+    } catch {
+      setComposeFrom('');
+    }
     setEmailComposeOpen(true);
+  };
+
+  const handleSendEmail = async () => {
+    const toAddr = composeTo.trim();
+    const subj = composeSubject.trim();
+    if (!toAddr || !toAddr.includes('@')) {
+      showToast('error', 'Invalid recipient', 'Enter a valid To email address.');
+      return;
+    }
+    setComposeSending(true);
+    try {
+      await gmailSendEmail({ to: toAddr, subject: subj, body: composeBody });
+      showToast('success', 'Email sent', 'Your message was sent successfully.');
+      setEmailComposeOpen(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to send email.';
+      showToast('error', 'Send failed', message);
+    } finally {
+      setComposeSending(false);
+    }
   };
 
   const handleGenerateEmailDrafts = async () => {
@@ -2261,9 +2289,9 @@ function ActivityPageContent(): React.ReactElement {
                 id="compose-from"
                 type="email"
                 value={composeFrom}
-                onChange={(e) => setComposeFrom(e.target.value)}
-                placeholder="Your email"
-                className="border-0 rounded-none px-0 h-9 focus-visible:ring-0 focus-visible:ring-offset-0"
+                readOnly
+                placeholder="Connect Gmail in Integrations"
+                className="border-0 rounded-none px-0 h-9 focus-visible:ring-0 focus-visible:ring-offset-0 bg-muted/30"
               />
             </div>
             <div className="grid grid-cols-[auto_1fr] gap-2 items-center px-4 py-2 border-b border-border text-sm">
@@ -2285,12 +2313,12 @@ function ActivityPageContent(): React.ReactElement {
               />
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t border-border bg-muted/30">
-              <Button type="button" variant="outline" onClick={() => setEmailComposeOpen(false)}>
+              <Button type="button" variant="outline" onClick={() => setEmailComposeOpen(false)} disabled={composeSending}>
                 Discard
               </Button>
-              <Button type="button" className="gap-2">
-                <Send className="h-4 w-4" />
-                Send
+              <Button type="button" className="gap-2" onClick={handleSendEmail} disabled={composeSending || !composeTo.trim()}>
+                {composeSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {composeSending ? 'Sending…' : 'Send'}
               </Button>
             </div>
           </div>

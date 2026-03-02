@@ -1,9 +1,10 @@
 """
-Gmail API endpoints: test connection, search, get message, extract contact from email.
+Gmail API endpoints: test connection, search, get message, extract contact, send email.
 """
 
 import base64
 import logging
+from email.mime.text import MIMEText
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -301,6 +302,13 @@ class GenerateActivityNoteRequest(BaseModel):
     message_id: str
 
 
+class SendEmailRequest(BaseModel):
+    """Request body for POST /gmail/send. From is the connected Gmail account."""
+    to: str
+    subject: str
+    body: str
+
+
 @router.post("/generate-activity-note")
 async def gmail_generate_activity_note(
     body: GenerateActivityNoteRequest,
@@ -410,3 +418,54 @@ async def gmail_extract_contact(
         user_email=user_email,
     )
     return extracted
+
+
+@router.post("/send")
+async def gmail_send(
+    body: SendEmailRequest,
+    user_id: str = Depends(get_current_user_id),
+    supabase: SupabaseService = Depends(get_supabase_service),
+):
+    """
+    Send an email via the user's connected Gmail. From is always the linked Gmail account.
+    Requires gmail.send scope (user must have connected Gmail with send permission).
+    """
+    to_addr = (body.to or "").strip()
+    subject = (body.subject or "").strip()
+    body_text = (body.body or "").strip()
+    if not to_addr or "@" not in to_addr:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Valid 'to' email is required")
+    tokens_row = await supabase.get_gmail_tokens(user_id)
+    if not tokens_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Gmail not connected. Connect Gmail from Integrations first.",
+        )
+    service = await get_gmail_client(user_id, supabase)
+    if not service:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Gmail not connected. Connect Gmail from Integrations first.",
+        )
+    from_email = (tokens_row.get("email") or "").strip()
+    if not from_email:
+        from_email = await _ensure_user_email_in_tokens(supabase, user_id, tokens_row, service)
+    if not from_email:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not determine sender email. Try reconnecting Gmail.",
+        )
+    try:
+        message = MIMEText(body_text, "plain", "utf-8")
+        message["To"] = to_addr
+        message["From"] = from_email
+        message["Subject"] = subject
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        sent = service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        return {"id": sent.get("id"), "message": "Email sent"}
+    except Exception as e:
+        logger.exception("Gmail send error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send email. Ensure Gmail is connected with send permission (reconnect if needed).",
+        )
