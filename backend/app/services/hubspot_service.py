@@ -494,6 +494,18 @@ class HubSpotService:
                     if isinstance(t, dict) and t.get("id"):
                         ids_list.append(str(t["id"]))
                 result[str(from_id)] = ids_list
+        # [CONTACT_DEBUG] Log association lookup: requested task_ids vs tasks that had associations
+        tasks_with_assoc = list(result.keys())
+        tasks_without = [tid for tid in ids if str(tid) not in result]
+        if tasks_without:
+            logger.info(
+                "[contact_debug] batch_read_task_associations(%s): requested=%s, with_assoc=%s, without=%s (sample)",
+                to_object_type,
+                len(ids),
+                len(tasks_with_assoc),
+                len(tasks_without),
+            )
+            logger.info("[contact_debug] sample task_ids without %s: %s", to_object_type, tasks_without[:5])
         return result
 
     def get_task(
@@ -547,11 +559,20 @@ class HubSpotService:
             raise
         except Exception as e:
             raise HubSpotServiceError(f"Failed to batch fetch contacts: {e!s}") from e
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict) and "results" in data:
-            return data["results"]
-        return []
+        out: list[dict[str, Any]] = data if isinstance(data, list) else (data["results"] if isinstance(data, dict) and "results" in data else [])
+        # [CONTACT_DEBUG] Log batch contact fetch: requested vs returned (IDs not returned might be deleted or invalid)
+        requested = contact_ids[:100]
+        returned_ids = [str(c.get("id", "")) for c in out if c.get("id")]
+        missing = [cid for cid in requested if str(cid) not in returned_ids]
+        if missing:
+            logger.info(
+                "[contact_debug] get_contacts_batch: requested=%s, returned=%s, missing_from_response=%s (sample)",
+                len(requested),
+                len(out),
+                len(missing),
+            )
+            logger.info("[contact_debug] get_contacts_batch missing id types: %s", [type(c).__name__ for c in missing[:5]])
+        return out
 
     def create_task(self, task_data: dict[str, Any]) -> dict[str, Any]:
         """Create a new task. task_data can be {'properties': {...}} or flat properties."""

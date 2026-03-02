@@ -183,6 +183,18 @@ function apiActivityToDashboardItem(api: DashboardActivity): DashboardActivityIt
   const contactName = contact
     ? [contact.first_name, contact.last_name].filter(Boolean).join(' ') || contact.email || 'Unknown'
     : 'Unknown';
+  // [CONTACT_DEBUG] Log when card would show "Unknown" so we can trace where contact data was lost
+  if (contactName === 'Unknown' && api.id) {
+    const contactIds = api.contact_ids ?? [];
+    const contactsLen = api.contacts?.length ?? 0;
+    console.info(
+      '[contact_debug] Dashboard item has Unknown contact: activityId=%s, contact_ids=%s, contacts.length=%s, first contact=%s',
+      api.id,
+      contactIds,
+      contactsLen,
+      contact ? { id: contact.id, first_name: contact.first_name, last_name: contact.last_name, email: contact.email } : null
+    );
+  }
   /** Last touch = last modified (HubSpot updatedAt / hs_lastmodifieddate) */
   const lastTouch = api.updated_at ?? api.created_at ?? new Date().toISOString();
   const rawSubject = api.subject ?? 'Untitled';
@@ -678,10 +690,18 @@ export default function DashboardPage(): React.ReactElement {
   });
 
   // Derive list and completed set from query data (so UI shows cached data when returning)
-  const activities = React.useMemo(
-    () => (activitiesQuery.data?.activities ?? []).map(apiActivityToDashboardItem),
-    [activitiesQuery.data]
-  );
+  const activities = React.useMemo(() => {
+    const list = (activitiesQuery.data?.activities ?? []).map(apiActivityToDashboardItem);
+    const unknownCount = list.filter((i) => i.activity.contactName === 'Unknown').length;
+    if (unknownCount > 0) {
+      console.info(
+        '[contact_debug] Dashboard: %s of %s activities have contact name "Unknown"',
+        unknownCount,
+        list.length
+      );
+    }
+    return list;
+  }, [activitiesQuery.data]);
   const completedIds = React.useMemo(
     () => new Set((activitiesQuery.data?.activities ?? []).filter((a) => a.completed).map((a) => a.id)),
     [activitiesQuery.data]

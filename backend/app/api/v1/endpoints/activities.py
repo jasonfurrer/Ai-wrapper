@@ -118,8 +118,16 @@ def _hubspot_task_to_activity(task: dict[str, Any]) -> dict[str, Any]:
     company_ids: list[str] = []
     assoc = task.get("associations")
     if assoc:
-        contact_ids = [a.get("id") for a in assoc.get("contacts", {}).get("results", []) if a.get("id")]
-        company_ids = [a.get("id") for a in assoc.get("companies", {}).get("results", []) if a.get("id")]
+        contact_ids = [str(a.get("id")) for a in assoc.get("contacts", {}).get("results", []) if a.get("id")]
+        company_ids = [str(a.get("id")) for a in assoc.get("companies", {}).get("results", []) if a.get("id")]
+    # [CONTACT_DEBUG] Log when task has no contact_ids from associations (helps trace "Unknown" contact on dashboard)
+    if not contact_ids and task.get("id"):
+        assoc_info = list(assoc.keys()) if isinstance(assoc, dict) else (type(assoc).__name__ if assoc is not None else "None")
+        logger.info(
+            "[contact_debug] task %s has no contact_ids from associations; associations=%s",
+            task.get("id"),
+            assoc_info,
+        )
 
     raw_body = (props.get(HS_BODY) or "").strip()
     body = _normalize_notes_body(raw_body) if raw_body else None
@@ -388,10 +396,19 @@ async def list_activities(
                 tid = a.get("id")
                 if not tid:
                     continue
-                if tid in task_to_contacts:
-                    a["contact_ids"] = task_to_contacts[tid]
-                if tid in task_to_companies:
-                    a["company_ids"] = task_to_companies[tid]
+                tid_str = str(tid)
+                if tid_str in task_to_contacts:
+                    a["contact_ids"] = task_to_contacts[tid_str]
+                if tid_str in task_to_companies:
+                    a["company_ids"] = task_to_companies[tid_str]
+                elif not a.get("contact_ids") and task_to_contacts:
+                    # [CONTACT_DEBUG] task id might be int vs str mismatch
+                    logger.info(
+                        "[contact_debug] search path: task %s (type=%s) not in task_to_contacts; keys sample=%s",
+                        tid,
+                        type(tid).__name__,
+                        list(task_to_contacts.keys())[:3] if task_to_contacts else [],
+                    )
 
             # No date/status filter: return all matching tasks (completed + not completed)
         elif date_from or date_to:
@@ -454,10 +471,18 @@ async def list_activities(
                 tid = a.get("id")
                 if not tid:
                     continue
-                if tid in task_to_contacts:
-                    a["contact_ids"] = task_to_contacts[tid]
-                if tid in task_to_companies:
-                    a["company_ids"] = task_to_companies[tid]
+                tid_str = str(tid)
+                if tid_str in task_to_contacts:
+                    a["contact_ids"] = task_to_contacts[tid_str]
+                if tid_str in task_to_companies:
+                    a["company_ids"] = task_to_companies[tid_str]
+                elif not a.get("contact_ids") and task_to_contacts:
+                    logger.info(
+                        "[contact_debug] date range path: task %s (type=%s) not in task_to_contacts; keys sample=%s",
+                        tid,
+                        type(tid).__name__,
+                        list(task_to_contacts.keys())[:3] if task_to_contacts else [],
+                    )
 
             # Apply only relationship/processing filters (date already applied by HubSpot search)
             activities = _apply_filters(
@@ -524,19 +549,46 @@ async def list_activities(
 
         # e) Enrich with contact details (phone, mobile_phone, company_name) for contact_ids
         all_contact_ids = list({cid for a in activities for cid in (a.get("contact_ids") or [])})
+        logger.info(
+            "[contact_debug] enrichment: total activities=%s, unique contact_ids=%s, sample contact_id types=%s",
+            len(activities),
+            len(all_contact_ids),
+            [type(cid).__name__ for cid in all_contact_ids[:5]],
+        )
         contact_id_to_company_name: dict[str, str] = {}
         if all_contact_ids:
             try:
-                contact_list = hubspot.get_contacts_batch(
-                    all_contact_ids,
-                    properties=["firstname", "lastname", "email", "phone", "mobilephone"],
-                )
+                # HubSpot batch read limit is 100; fetch contacts in chunks so all IDs are resolved
+                contact_list: list[dict[str, Any]] = []
+                for i in range(0, len(all_contact_ids), 100):
+                    chunk = all_contact_ids[i : i + 100]
+                    contact_list.extend(
+                        hubspot.get_contacts_batch(
+                            chunk,
+                            properties=["firstname", "lastname", "email", "phone", "mobilephone"],
+                        )
+                    )
                 contact_map = {str(c.get("id", "")): c for c in contact_list if c.get("id")}
+                logger.info(
+                    "[contact_debug] get_contacts_batch returned %s contacts; contact_map keys (sample)=%s",
+                    len(contact_list),
+                    list(contact_map.keys())[:5],
+                )
                 try:
-                    contact_to_company = hubspot.batch_read_contact_company_ids(all_contact_ids)
+                    # Fetch contact->company associations in chunks (HubSpot limit 100 per request)
+                    contact_to_company: dict[str, str] = {}
+                    for i in range(0, len(all_contact_ids), 100):
+                        chunk = all_contact_ids[i : i + 100]
+                        contact_to_company.update(hubspot.batch_read_contact_company_ids(chunk))
                     unique_company_ids = list(dict.fromkeys(contact_to_company.values()))
                     if unique_company_ids:
-                        companies = hubspot.get_companies_batch(unique_company_ids, properties=["name"])
+                        companies = []
+                        for j in range(0, len(unique_company_ids), 100):
+                            companies.extend(
+                                hubspot.get_companies_batch(
+                                    unique_company_ids[j : j + 100], properties=["name"]
+                                )
+                            )
                         company_name_by_id = {}
                         for co in companies:
                             cid = str(co.get("id", ""))
@@ -547,11 +599,23 @@ async def list_activities(
                 except HubSpotServiceError:
                     pass
                 for a in activities:
+                    cids = a.get("contact_ids") or []
+                    # Normalize to string for lookup (HubSpot/cache may return int or str)
                     a["contacts"] = [
-                        contact_map[cid] for cid in (a.get("contact_ids") or []) if cid in contact_map
+                        contact_map[str(cid)] for cid in cids if str(cid) in contact_map
                     ]
+                    missing = [cid for cid in cids if str(cid) not in contact_map]
+                    if missing:
+                        logger.info(
+                            "[contact_debug] task %s: contact_ids=%s -> resolved %s contacts; missing (not in contact_map)=%s; cid types=%s",
+                            a.get("id"),
+                            cids,
+                            len(a["contacts"]),
+                            missing,
+                            [type(c).__name__ for c in missing],
+                        )
                     a["contact_company_names"] = {
-                        cid: contact_id_to_company_name.get(cid, "")
+                        str(cid): contact_id_to_company_name.get(str(cid), "")
                         for cid in (a.get("contact_ids") or [])
                     }
                     # Use contact's company for company_ids when task has none (so dashboard passes company_id and Activity page account is always populated)
