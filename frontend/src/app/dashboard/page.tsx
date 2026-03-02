@@ -1505,7 +1505,10 @@ export default function DashboardPage(): React.ReactElement {
                   <Button
                     variant={activeQuickView === 'overdue_all' ? 'secondary' : 'ghost'}
                     size="sm"
-                    className="h-8 justify-start font-normal"
+                    className={cn(
+                      'h-8 justify-start font-normal',
+                      activeQuickView === 'overdue_all' && 'bg-muted hover:bg-muted/90'
+                    )}
                     onClick={() => {
                       handleOverdueAll();
                       setOverduePopoverOpen(false);
@@ -1516,7 +1519,10 @@ export default function DashboardPage(): React.ReactElement {
                   <Button
                     variant={activeQuickView === 'overdue_week' ? 'secondary' : 'ghost'}
                     size="sm"
-                    className="h-8 justify-start font-normal"
+                    className={cn(
+                      'h-8 justify-start font-normal',
+                      activeQuickView === 'overdue_week' && 'bg-muted hover:bg-muted/90'
+                    )}
                     onClick={() => {
                       handleOverdueWeek();
                       setOverduePopoverOpen(false);
@@ -1527,7 +1533,10 @@ export default function DashboardPage(): React.ReactElement {
                   <Button
                     variant={activeQuickView === 'overdue_month' ? 'secondary' : 'ghost'}
                     size="sm"
-                    className="h-8 justify-start font-normal"
+                    className={cn(
+                      'h-8 justify-start font-normal',
+                      activeQuickView === 'overdue_month' && 'bg-muted hover:bg-muted/90'
+                    )}
                     onClick={() => {
                       handleOverdueMonth();
                       setOverduePopoverOpen(false);
@@ -1621,7 +1630,10 @@ export default function DashboardPage(): React.ReactElement {
                   <Button
                     variant={activeQuickView === 'upcoming_all' ? 'secondary' : 'ghost'}
                     size="sm"
-                    className="h-8 justify-start font-normal"
+                    className={cn(
+                      'h-8 justify-start font-normal',
+                      activeQuickView === 'upcoming_all' && 'bg-muted hover:bg-muted/90'
+                    )}
                     onClick={() => {
                       handleUpcomingAll();
                       setUpcomingPopoverOpen(false);
@@ -1632,7 +1644,10 @@ export default function DashboardPage(): React.ReactElement {
                   <Button
                     variant={activeQuickView === 'upcoming_week' ? 'secondary' : 'ghost'}
                     size="sm"
-                    className="h-8 justify-start font-normal"
+                    className={cn(
+                      'h-8 justify-start font-normal',
+                      activeQuickView === 'upcoming_week' && 'bg-muted hover:bg-muted/90'
+                    )}
                     onClick={() => {
                       handleUpcomingWeek();
                       setUpcomingPopoverOpen(false);
@@ -1643,7 +1658,10 @@ export default function DashboardPage(): React.ReactElement {
                   <Button
                     variant={activeQuickView === 'upcoming_month' ? 'secondary' : 'ghost'}
                     size="sm"
-                    className="h-8 justify-start font-normal"
+                    className={cn(
+                      'h-8 justify-start font-normal',
+                      activeQuickView === 'upcoming_month' && 'bg-muted hover:bg-muted/90'
+                    )}
                     onClick={() => {
                       handleUpcomingMonth();
                       setUpcomingPopoverOpen(false);
