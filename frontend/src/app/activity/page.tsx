@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   Pencil,
   X,
+  Send,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Calendar } from '@/components/ui/calendar';
@@ -171,6 +172,7 @@ interface ActivityDraftStored {
   selectedDraftTone: DraftTone;
   drafts: Record<string, { text: string; confidence: number }>;
   summaryDraft: string;
+  emailDraftInstructions: string;
 }
 
 const DRAFT_VERSION = 1;
@@ -863,10 +865,16 @@ function ActivityPageContent(): React.ReactElement {
   const [editingDraftTone, setEditingDraftTone] = React.useState<DraftTone | null>(null);
   const [isRegeneratingInPreview, setIsRegeneratingInPreview] = React.useState(false);
   const [previousNotesForSubmit, setPreviousNotesForSubmit] = React.useState('');
+  const [emailDraftInstructions, setEmailDraftInstructions] = React.useState('');
   const [commSummary, setCommSummary] = React.useState<CommunicationSummaryResponse | null>(null);
   const [commSummaryLoading, setCommSummaryLoading] = React.useState(false);
   const [commSummaryError, setCommSummaryError] = React.useState<string | null>(null);
   const [processConfirmOpen, setProcessConfirmOpen] = React.useState(false);
+  const [emailComposeOpen, setEmailComposeOpen] = React.useState(false);
+  const [composeTo, setComposeTo] = React.useState('');
+  const [composeFrom, setComposeFrom] = React.useState('');
+  const [composeSubject, setComposeSubject] = React.useState('');
+  const [composeBody, setComposeBody] = React.useState('');
   const [toast, setToast] = React.useState<{ open: boolean; variant: 'success' | 'error'; title: string; description?: string }>({
     open: false,
     variant: 'success',
@@ -907,6 +915,7 @@ function ActivityPageContent(): React.ReactElement {
     setSelectedDraftTone(stored.selectedDraftTone ?? 'original');
     setDrafts(stored.drafts ?? MOCK_DRAFTS);
     setSummaryDraft(stored.summaryDraft ?? '');
+    setEmailDraftInstructions(stored.emailDraftInstructions ?? '');
   }, [activityId]);
 
   // Pre-fill contact and account from URL (dashboard Open passes these); skip if we restored from draft
@@ -1083,6 +1092,7 @@ function ActivityPageContent(): React.ReactElement {
       selectedDraftTone,
       drafts,
       summaryDraft,
+      emailDraftInstructions,
     };
     latestDraftRef.current = payload;
     const t = setTimeout(() => {
@@ -1115,6 +1125,7 @@ function ActivityPageContent(): React.ReactElement {
     selectedDraftTone,
     drafts,
     summaryDraft,
+    emailDraftInstructions,
   ]);
 
   React.useEffect(() => {
@@ -1335,6 +1346,23 @@ function ActivityPageContent(): React.ReactElement {
     }, 1200);
   };
 
+  type SmartComposeTone = 'concise' | 'formal' | 'warm';
+  const SMART_COMPOSE_TONES: SmartComposeTone[] = ['concise', 'formal', 'warm'];
+  const SMART_COMPOSE_LABELS: Record<SmartComposeTone, string> = {
+    concise: 'Concise',
+    formal: 'Formal',
+    warm: 'Warm',
+  };
+  const openEmailCompose = (tone: SmartComposeTone) => {
+    const draft = drafts[tone];
+    const bodyText = draft?.text ?? '';
+    setComposeTo(selectedContact?.email ?? '');
+    setComposeFrom('');
+    setComposeSubject(subject || '');
+    setComposeBody(bodyText);
+    setEmailComposeOpen(true);
+  };
+
   const charCount = noteContent.length;
   const CHAR_LIMIT = 10000;
 
@@ -1343,7 +1371,7 @@ function ActivityPageContent(): React.ReactElement {
     <div className="h-full flex overflow-hidden gap-0">
       {/* Left column - expands to fill space up to the right column (min 400px) */}
       <div className="flex-1 min-w-[400px] overflow-y-auto bg-surface border-r border-border">
-        <div className="flex flex-col gap-6 p-4">
+        <div className="flex flex-col gap-4 p-4">
         {/* 1. Note Editor */}
         <Card className="border-[1.5px]">
           <CardHeader className="pb-2">
@@ -1402,6 +1430,26 @@ function ActivityPageContent(): React.ReactElement {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+          </CardContent>
+        </Card>
+
+        {/* Email Draft Instructions */}
+        <Card className="border-[1.5px]">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold">Email Draft Instructions</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <Textarea
+              placeholder="Instructions for email drafts (e.g. tone, key points to include)..."
+              value={emailDraftInstructions}
+              onChange={(e) => setEmailDraftInstructions(e.target.value)}
+              className="min-h-[120px] resize-y"
+            />
+            <div className="mt-3">
+              <Button type="button" variant="default">
+                Generate drafts
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -1848,6 +1896,40 @@ function ActivityPageContent(): React.ReactElement {
           </CardContent>
         </Card>
 
+        {/* Smart compose - email drafts (concise, formal, warm) */}
+        <Card className="border-[1.5px]">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold flex items-center gap-2">
+              <Mail className="h-4 w-4" />
+              Smart Email Compose
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Choose a draft style to open in the email composer.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            {SMART_COMPOSE_TONES.map((tone) => {
+              const draft = drafts[tone];
+              const preview = draft?.text ?? '';
+              return (
+                <button
+                  key={tone}
+                  type="button"
+                  onClick={() => openEmailCompose(tone)}
+                  className="w-full text-left rounded-md border border-border p-3 hover:bg-muted/50 hover:border-primary/50 transition-colors"
+                >
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary inline-block mb-2">
+                    {SMART_COMPOSE_LABELS[tone]}
+                  </span>
+                  <p className="text-sm text-muted-foreground line-clamp-2">
+                    {preview || `No ${SMART_COMPOSE_LABELS[tone].toLowerCase()} draft yet. Process your notes first.`}
+                  </p>
+                </button>
+              );
+            })}
+          </CardContent>
+        </Card>
+
         {/* 5. AI-Generated Drafts */}
         <Card className="border-[1.5px]">
           <CardHeader>
@@ -2102,6 +2184,66 @@ function ActivityPageContent(): React.ReactElement {
               Use This Draft
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Smart compose - email editing window (Gmail-like) */}
+      <Dialog open={emailComposeOpen} onOpenChange={setEmailComposeOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0" showClose={true}>
+          <DialogHeader className="px-4 pt-4 pb-2 border-b border-border">
+            <DialogTitle className="text-lg">New message</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+            <div className="grid grid-cols-[auto_1fr] gap-2 items-center px-4 py-2 border-b border-border text-sm">
+              <Label htmlFor="compose-to" className="text-muted-foreground w-14 shrink-0">To</Label>
+              <Input
+                id="compose-to"
+                type="email"
+                value={composeTo}
+                onChange={(e) => setComposeTo(e.target.value)}
+                placeholder="Recipient email"
+                className="border-0 rounded-none px-0 h-9 focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+            </div>
+            <div className="grid grid-cols-[auto_1fr] gap-2 items-center px-4 py-2 border-b border-border text-sm">
+              <Label htmlFor="compose-from" className="text-muted-foreground w-14 shrink-0">From</Label>
+              <Input
+                id="compose-from"
+                type="email"
+                value={composeFrom}
+                onChange={(e) => setComposeFrom(e.target.value)}
+                placeholder="Your email"
+                className="border-0 rounded-none px-0 h-9 focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+            </div>
+            <div className="grid grid-cols-[auto_1fr] gap-2 items-center px-4 py-2 border-b border-border text-sm">
+              <Label htmlFor="compose-subject" className="text-muted-foreground w-14 shrink-0">Subject</Label>
+              <Input
+                id="compose-subject"
+                value={composeSubject}
+                onChange={(e) => setComposeSubject(e.target.value)}
+                placeholder="Subject"
+                className="border-0 rounded-none px-0 h-9 focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+            </div>
+            <div className="flex-1 flex flex-col min-h-[240px] overflow-hidden">
+              <Textarea
+                value={composeBody}
+                onChange={(e) => setComposeBody(e.target.value)}
+                placeholder="Compose your email..."
+                className="flex-1 min-h-[200px] resize-none border-0 rounded-none px-4 py-3 focus-visible:ring-0 focus-visible:ring-offset-0 text-sm"
+              />
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 border-t border-border bg-muted/30">
+              <Button type="button" variant="outline" onClick={() => setEmailComposeOpen(false)}>
+                Discard
+              </Button>
+              <Button type="button" className="gap-2">
+                <Send className="h-4 w-4" />
+                Send
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
