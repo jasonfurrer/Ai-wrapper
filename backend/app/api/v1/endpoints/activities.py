@@ -25,6 +25,8 @@ from app.schemas.activity import (
     CreateAndSubmitResponse,
     DraftOut,
     ExtractedMetadataOut,
+    GenerateEmailDraftsRequest,
+    GenerateEmailDraftsResponse,
     ProcessDraftRequest,
     ProcessNotesRequest,
     ProcessNotesResponse,
@@ -41,6 +43,7 @@ from app.services.claude_agents import (
     extract_recognised_date,
     generate_communication_summary,
     generate_drafts,
+    generate_email_drafts,
     recommend_touch_date,
     regenerate_single_draft,
     summarize_communication_history,
@@ -1091,6 +1094,41 @@ async def process_draft(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process draft",
+        )
+
+
+@router.post(
+    "/generate-email-drafts",
+    response_model=GenerateEmailDraftsResponse,
+    summary="Generate Smart compose email drafts",
+    description="Generate warm, concise, and formal email drafts from instructions, client notes, task title, and optional last touch date.",
+)
+async def generate_smart_compose_drafts(
+    body: GenerateEmailDraftsRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> GenerateEmailDraftsResponse:
+    """POST /api/v1/activities/generate-email-drafts — Claude agent for Smart compose (warm, concise, formal)."""
+    try:
+        drafts_map = generate_email_drafts(
+            email_instructions=body.email_instructions or "",
+            client_notes=body.client_notes or "",
+            task_title=body.task_title or "",
+            last_touch_date=body.last_touch_date,
+        )
+        drafts_out = {
+            k: DraftOut(text=v["text"], confidence=v["confidence"])
+            for k, v in drafts_map.items()
+        }
+        return GenerateEmailDraftsResponse(drafts=drafts_out)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Generate email drafts error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate email drafts",
         )
 
 

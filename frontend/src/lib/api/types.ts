@@ -237,6 +237,21 @@ export interface RegenerateDraftRequest {
 }
 
 // -----------------------------------------------------------------------------
+// Generate email drafts (Smart compose) POST /api/v1/activities/generate-email-drafts
+// -----------------------------------------------------------------------------
+
+export interface GenerateEmailDraftsRequest {
+  email_instructions: string;
+  client_notes: string;
+  task_title: string;
+  last_touch_date?: string | null;
+}
+
+export interface GenerateEmailDraftsResponse {
+  drafts: Record<string, DraftOut>; // keys: warm, concise, formal
+}
+
+// -----------------------------------------------------------------------------
 // Communication summary (GET /api/v1/activities/{id}/communication-summary)
 // -----------------------------------------------------------------------------
 

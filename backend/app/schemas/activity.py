@@ -156,6 +156,19 @@ class ProcessNotesResponse(BaseModel):
     drafts: dict[str, DraftOut] = {}  # keys: original, formal, concise, warm, detailed
 
 
+class GenerateEmailDraftsRequest(BaseModel):
+    """Request body for POST /activities/generate-email-drafts (Smart compose)."""
+    email_instructions: str = ""
+    client_notes: str = ""
+    task_title: str = ""
+    last_touch_date: str | None = None  # ISO date or human-readable; optional
+
+
+class GenerateEmailDraftsResponse(BaseModel):
+    """Response from generate-email-drafts: warm, concise, formal email drafts."""
+    drafts: dict[str, DraftOut] = {}  # keys: warm, concise, formal
+
+
 def _hubspot_priority(value: str | None) -> str | None:
     """Map app priority ('none'|'low'|'medium'|'high') to HubSpot hs_task_priority (LOW/MEDIUM/HIGH). None/none omitted."""
     if not value or value.strip().lower() == "none":

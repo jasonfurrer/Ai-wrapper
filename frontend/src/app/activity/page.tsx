@@ -62,6 +62,7 @@ import {
   getCommunicationSummary,
   processActivityNotes,
   processDraft,
+  generateEmailDrafts,
   createAndSubmitActivity,
   submitActivity,
   getContactsByCompany,
@@ -871,6 +872,8 @@ function ActivityPageContent(): React.ReactElement {
   const [commSummaryError, setCommSummaryError] = React.useState<string | null>(null);
   const [processConfirmOpen, setProcessConfirmOpen] = React.useState(false);
   const [emailComposeOpen, setEmailComposeOpen] = React.useState(false);
+  const [generateDraftsLoading, setGenerateDraftsLoading] = React.useState(false);
+  const [generateDraftsError, setGenerateDraftsError] = React.useState<string | null>(null);
   const [composeTo, setComposeTo] = React.useState('');
   const [composeFrom, setComposeFrom] = React.useState('');
   const [composeSubject, setComposeSubject] = React.useState('');
@@ -1363,6 +1366,28 @@ function ActivityPageContent(): React.ReactElement {
     setEmailComposeOpen(true);
   };
 
+  const handleGenerateEmailDrafts = async () => {
+    setGenerateDraftsError(null);
+    setGenerateDraftsLoading(true);
+    try {
+      const clientNotes = [previousNotesForSubmit, noteContent].filter(Boolean).join('\n\n').trim();
+      const res = await generateEmailDrafts({
+        email_instructions: emailDraftInstructions.trim(),
+        client_notes: clientNotes,
+        task_title: subject.trim(),
+        last_touch_date: activity?.updated_at ?? null,
+      });
+      setDrafts((prev) => ({ ...prev, ...res.drafts }));
+      showToast('success', 'Email drafts generated', 'Warm, concise, and formal drafts are ready in Smart compose.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate email drafts.';
+      setGenerateDraftsError(message);
+      showToast('error', 'Generate drafts failed', message);
+    } finally {
+      setGenerateDraftsLoading(false);
+    }
+  };
+
   const charCount = noteContent.length;
   const CHAR_LIMIT = 10000;
 
@@ -1445,9 +1470,25 @@ function ActivityPageContent(): React.ReactElement {
               onChange={(e) => setEmailDraftInstructions(e.target.value)}
               className="min-h-[120px] resize-y"
             />
+            {generateDraftsError && (
+              <p className="mt-2 text-sm text-status-at-risk">{generateDraftsError}</p>
+            )}
             <div className="mt-3">
-              <Button type="button" variant="default">
-                Generate drafts
+              <Button
+                type="button"
+                variant="default"
+                onClick={handleGenerateEmailDrafts}
+                disabled={generateDraftsLoading}
+                className="gap-2"
+              >
+                {generateDraftsLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Generating…
+                  </>
+                ) : (
+                  'Generate drafts'
+                )}
               </Button>
             </div>
           </CardContent>

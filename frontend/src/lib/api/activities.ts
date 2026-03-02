@@ -12,6 +12,8 @@ import type {
   CommunicationSummaryResponse,
   CreateActivityData,
   DashboardActivity,
+  GenerateEmailDraftsRequest,
+  GenerateEmailDraftsResponse,
   ProcessDraftRequest,
   ProcessNotesRequest,
   ProcessNotesResponse,
@@ -294,6 +296,34 @@ export async function processActivityNotes(
     if (err instanceof ApiClientError) throw err;
     throw new Error(
       err instanceof Error ? err.message : 'Failed to process notes'
+    );
+  }
+}
+
+/**
+ * POST /api/v1/activities/generate-email-drafts
+ * Generate Smart compose email drafts (warm, concise, formal) from instructions, client notes, task title, last touch date.
+ */
+export async function generateEmailDrafts(
+  data: GenerateEmailDraftsRequest
+): Promise<GenerateEmailDraftsResponse> {
+  try {
+    return fetchApi<GenerateEmailDraftsResponse>(
+      '/api/v1/activities/generate-email-drafts',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          email_instructions: data.email_instructions ?? '',
+          client_notes: data.client_notes ?? '',
+          task_title: data.task_title ?? '',
+          last_touch_date: data.last_touch_date ?? null,
+        }),
+      }
+    );
+  } catch (err) {
+    if (err instanceof ApiClientError) throw err;
+    throw new Error(
+      err instanceof Error ? err.message : 'Failed to generate email drafts'
     );
   }
 }
