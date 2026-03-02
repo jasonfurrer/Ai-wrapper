@@ -22,8 +22,11 @@ import {
   Loader2,
   CalendarDays,
   AlertCircle,
+  ChevronDown,
+  ListTodo,
+  CalendarRange,
 } from 'lucide-react';
-import { format, startOfWeek, endOfWeek, subDays } from 'date-fns';
+import { format, startOfWeek, endOfWeek, subDays, addDays } from 'date-fns';
 import { Calendar } from '@/components/ui/calendar';
 import {
   Popover,
@@ -431,8 +434,27 @@ function getThisWeekRange(): { from: string; to: string } {
   return { from: fmt(start), to: fmt(end) };
 }
 
-/** Quick view presets: Today, Overdue, This Week */
+/** Quick view presets: Today, Overdue, This Week, All, Upcoming */
 const QUICK_VIEW_OVERDUE_DATE_FROM = '1970-01-01';
+const UPCOMING_END_FAR = '2099-12-31';
+
+/** Upcoming: next 7 days (today through today + 6). */
+function getUpcomingWeekRange(): { from: string; to: string } {
+  const start = new Date();
+  const end = addDays(start, 6);
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { from: fmt(start), to: fmt(end) };
+}
+
+/** Upcoming: next 30 days (today through today + 29). */
+function getUpcomingMonthRange(): { from: string; to: string } {
+  const start = new Date();
+  const end = addDays(start, 29);
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { from: fmt(start), to: fmt(end) };
+}
 
 // ---------------------------------------------------------------------------
 // Page
@@ -499,6 +521,8 @@ export default function DashboardPage(): React.ReactElement {
     title: '',
     description: undefined,
   });
+  const [upcomingPopoverOpen, setUpcomingPopoverOpen] = React.useState(false);
+  const upcomingPopoverCloseTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Ref holding latest state so we can persist on unmount (flush before navigate away)
   const latestStateRef = React.useRef({
     selectedActivityId,
@@ -515,6 +539,15 @@ export default function DashboardPage(): React.ReactElement {
   const hasUserInteractedRef = React.useRef(false);
   const weJustAppliedServerStateRef = React.useRef(false);
   const isUnmountingRef = React.useRef(false);
+
+  React.useEffect(() => {
+    return () => {
+      if (upcomingPopoverCloseTimeoutRef.current) {
+        clearTimeout(upcomingPopoverCloseTimeoutRef.current);
+        upcomingPopoverCloseTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const showToast = React.useCallback(
     (variant: ToastState['variant'], title: string, description?: string) => {
@@ -831,11 +864,75 @@ export default function DashboardPage(): React.ReactElement {
     setFilterDialogOpen(false);
   };
 
+  /** All tasks: no date filter, show everything. */
+  const handleQuickViewAll = () => {
+    const showAllFilter: FilterState = {
+      ...DEFAULT_FILTER,
+      dateFrom: ALL_TASKS_DATE_FROM,
+      dateTo: ALL_TASKS_DATE_TO,
+    };
+    setFilterApplied(showAllFilter);
+    setFilterDraft(showAllFilter);
+    setDatePickerValue('');
+    setFilterDialogOpen(false);
+  };
+
+  /** Upcoming: tasks from today onward — All (far future), Week (7 days), or Month (30 days). */
+  const handleUpcomingAll = () => {
+    const today = getTodayDateString();
+    const filter: FilterState = {
+      ...DEFAULT_FILTER,
+      dateFrom: today,
+      dateTo: UPCOMING_END_FAR,
+    };
+    setFilterApplied(filter);
+    setFilterDraft(filter);
+    setDatePickerValue('');
+    setFilterDialogOpen(false);
+  };
+  const handleUpcomingWeek = () => {
+    const { from, to } = getUpcomingWeekRange();
+    const filter: FilterState = {
+      ...DEFAULT_FILTER,
+      dateFrom: from,
+      dateTo: to,
+    };
+    setFilterApplied(filter);
+    setFilterDraft(filter);
+    setDatePickerValue('');
+    setFilterDialogOpen(false);
+  };
+  const handleUpcomingMonth = () => {
+    const { from, to } = getUpcomingMonthRange();
+    const filter: FilterState = {
+      ...DEFAULT_FILTER,
+      dateFrom: from,
+      dateTo: to,
+    };
+    setFilterApplied(filter);
+    setFilterDraft(filter);
+    setDatePickerValue('');
+    setFilterDialogOpen(false);
+  };
+
   /** Which quick view is active (for highlighting). Derived from current filter + date. */
   const activeQuickView = React.useMemo(() => {
     const today = getTodayDateString();
     const yesterday = getYesterdayDateString();
     const week = getThisWeekRange();
+    const upcomingWeek = getUpcomingWeekRange();
+    const upcomingMonth = getUpcomingMonthRange();
+    // All tasks
+    if (
+      !datePickerValue &&
+      filterApplied.dateFrom === ALL_TASKS_DATE_FROM &&
+      filterApplied.dateTo === ALL_TASKS_DATE_TO &&
+      filterApplied.priority.length === 0 &&
+      filterApplied.taskStatus.length === 0
+    ) {
+      return 'all' as const;
+    }
+    // Today
     if (
       datePickerValue === today &&
       !filterApplied.dateFrom &&
@@ -845,6 +942,7 @@ export default function DashboardPage(): React.ReactElement {
     ) {
       return 'today' as const;
     }
+    // Overdue
     if (
       !datePickerValue &&
       filterApplied.dateFrom === QUICK_VIEW_OVERDUE_DATE_FROM &&
@@ -855,6 +953,7 @@ export default function DashboardPage(): React.ReactElement {
     ) {
       return 'overdue' as const;
     }
+    // This week
     if (
       !datePickerValue &&
       filterApplied.dateFrom === week.from &&
@@ -863,6 +962,36 @@ export default function DashboardPage(): React.ReactElement {
       filterApplied.taskStatus.length === 0
     ) {
       return 'this_week' as const;
+    }
+    // Upcoming: all (today -> far future)
+    if (
+      !datePickerValue &&
+      filterApplied.dateFrom === today &&
+      filterApplied.dateTo === UPCOMING_END_FAR &&
+      filterApplied.priority.length === 0 &&
+      filterApplied.taskStatus.length === 0
+    ) {
+      return 'upcoming_all' as const;
+    }
+    // Upcoming: week
+    if (
+      !datePickerValue &&
+      filterApplied.dateFrom === upcomingWeek.from &&
+      filterApplied.dateTo === upcomingWeek.to &&
+      filterApplied.priority.length === 0 &&
+      filterApplied.taskStatus.length === 0
+    ) {
+      return 'upcoming_week' as const;
+    }
+    // Upcoming: month
+    if (
+      !datePickerValue &&
+      filterApplied.dateFrom === upcomingMonth.from &&
+      filterApplied.dateTo === upcomingMonth.to &&
+      filterApplied.priority.length === 0 &&
+      filterApplied.taskStatus.length === 0
+    ) {
+      return 'upcoming_month' as const;
     }
     return null;
   }, [datePickerValue, filterApplied]);
@@ -1130,8 +1259,29 @@ export default function DashboardPage(): React.ReactElement {
       <div className="flex-1 min-h-0 grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-12 lg:items-stretch">
         {/* Left panel - Activity cards (6 cols on desktop), only this section scrolls */}
         <section className="flex flex-col min-h-0 lg:col-span-6 lg:flex-1 lg:overflow-hidden rounded-lg bg-section border border-border p-4">
-          {/* Quick view presets: Today, Overdue, This Week */}
+          {/* Quick view presets: All, Today, This Week, Overdue, Upcoming */}
           <div className="flex flex-wrap items-center gap-2 shrink-0 mb-4">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={activeQuickView === 'all' ? 'secondary' : 'outline'}
+                  size="sm"
+                  className={cn(
+                    'h-9 gap-1.5 shrink-0',
+                    activeQuickView === 'all' && 'ring-2 ring-primary/50'
+                  )}
+                  onClick={handleQuickViewAll}
+                  aria-pressed={activeQuickView === 'all'}
+                  aria-label="Show all tasks"
+                >
+                  <ListTodo className="h-4 w-4 shrink-0" />
+                  All
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Show all tasks (any date, completed or not)
+              </TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1195,6 +1345,120 @@ export default function DashboardPage(): React.ReactElement {
                 Show incomplete tasks with due dates before today
               </TooltipContent>
             </Tooltip>
+            <Popover
+              open={upcomingPopoverOpen}
+              onOpenChange={(open) => {
+                if (!open && upcomingPopoverCloseTimeoutRef.current) {
+                  clearTimeout(upcomingPopoverCloseTimeoutRef.current);
+                  upcomingPopoverCloseTimeoutRef.current = null;
+                }
+                setUpcomingPopoverOpen(open);
+              }}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant={
+                        activeQuickView === 'upcoming_all' ||
+                        activeQuickView === 'upcoming_week' ||
+                        activeQuickView === 'upcoming_month'
+                          ? 'secondary'
+                          : 'outline'
+                      }
+                      size="sm"
+                      className={cn(
+                        'h-9 gap-1.5 shrink-0',
+                        (activeQuickView === 'upcoming_all' ||
+                          activeQuickView === 'upcoming_week' ||
+                          activeQuickView === 'upcoming_month') &&
+                          'ring-2 ring-primary/50'
+                      )}
+                      aria-pressed={
+                        activeQuickView === 'upcoming_all' ||
+                        activeQuickView === 'upcoming_week' ||
+                        activeQuickView === 'upcoming_month'
+                      }
+                      aria-label="Show upcoming tasks"
+                      aria-haspopup="menu"
+                      onMouseEnter={() => {
+                        if (upcomingPopoverCloseTimeoutRef.current) {
+                          clearTimeout(upcomingPopoverCloseTimeoutRef.current);
+                          upcomingPopoverCloseTimeoutRef.current = null;
+                        }
+                        setUpcomingPopoverOpen(true);
+                      }}
+                      onMouseLeave={() => {
+                        upcomingPopoverCloseTimeoutRef.current = window.setTimeout(
+                          () => setUpcomingPopoverOpen(false),
+                          150
+                        );
+                      }}
+                    >
+                      <CalendarRange className="h-4 w-4 shrink-0" />
+                      Upcoming
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                    </Button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Hover for options: All, Week, or Month
+                </TooltipContent>
+              </Tooltip>
+              <PopoverContent
+                className="w-40 p-1"
+                align="start"
+                onMouseEnter={() => {
+                  if (upcomingPopoverCloseTimeoutRef.current) {
+                    clearTimeout(upcomingPopoverCloseTimeoutRef.current);
+                    upcomingPopoverCloseTimeoutRef.current = null;
+                  }
+                  setUpcomingPopoverOpen(true);
+                }}
+                onMouseLeave={() => {
+                  upcomingPopoverCloseTimeoutRef.current = window.setTimeout(
+                    () => setUpcomingPopoverOpen(false),
+                    150
+                  );
+                }}
+              >
+                <div className="flex flex-col gap-0.5">
+                  <Button
+                    variant={activeQuickView === 'upcoming_all' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-8 justify-start font-normal"
+                    onClick={() => {
+                      handleUpcomingAll();
+                      setUpcomingPopoverOpen(false);
+                    }}
+                  >
+                    All
+                  </Button>
+                  <Button
+                    variant={activeQuickView === 'upcoming_week' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-8 justify-start font-normal"
+                    onClick={() => {
+                      handleUpcomingWeek();
+                      setUpcomingPopoverOpen(false);
+                    }}
+                  >
+                    Week
+                  </Button>
+                  <Button
+                    variant={activeQuickView === 'upcoming_month' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-8 justify-start font-normal"
+                    onClick={() => {
+                      handleUpcomingMonth();
+                      setUpcomingPopoverOpen(false);
+                    }}
+                  >
+                    Month
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
           {/* Activity search bar - search by title, contact, or company */}
           <div className="relative shrink-0 mb-3 w-full min-w-0">
