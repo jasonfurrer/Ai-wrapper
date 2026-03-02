@@ -48,6 +48,7 @@ from app.services.claude_agents import (
     regenerate_single_draft,
     summarize_communication_history,
 )
+from app.services.gmail_service import get_gmail_user_display_name
 from app.services.hubspot_service import HubSpotService, HubSpotServiceError, get_hubspot_service
 from app.services.supabase_service import SupabaseService, get_supabase_service
 
@@ -1106,15 +1107,37 @@ async def process_draft(
 async def generate_smart_compose_drafts(
     body: GenerateEmailDraftsRequest,
     user_id: str = Depends(get_current_user_id),
+    supabase: SupabaseService = Depends(get_supabase_service),
 ) -> GenerateEmailDraftsResponse:
     """POST /api/v1/activities/generate-email-drafts — Claude agent for Smart compose (warm, concise, formal)."""
     try:
+        # Always prefer the name from the connected Gmail integration, since that
+        # is the account used for imports and sending. The login identity's name/email
+        # should not affect email sign-offs.
+        gmail_sender_name = await get_gmail_user_display_name(user_id, supabase)
+        request_sender_name = (body.sender_name or "").strip() or None
+        sender_name = gmail_sender_name or request_sender_name
+
+        if gmail_sender_name:
+            logger.info(
+                "[generate-email-drafts] using sender_name from Gmail integration for user_id=%s (length=%d)",
+                user_id[:8],
+                len(gmail_sender_name),
+            )
+        elif request_sender_name:
+            logger.info(
+                "[generate-email-drafts] Gmail sender name unavailable; using sender_name from request (length=%d)",
+                len(request_sender_name),
+            )
+        else:
+            logger.info("[generate-email-drafts] no sender_name available (Gmail + request both empty)")
+
         drafts_map, suggested_subject = generate_email_drafts(
             email_instructions=body.email_instructions or "",
             client_notes=body.client_notes or "",
             task_title=body.task_title or "",
             last_touch_date=body.last_touch_date,
-            sender_name=body.sender_name,
+            sender_name=sender_name,
         )
         drafts_out = {
             k: DraftOut(text=v["text"], confidence=v["confidence"])

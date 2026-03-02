@@ -458,6 +458,16 @@ def generate_email_drafts(
     last_touch = (last_touch_date or "").strip()
     sender = (sender_name or "").strip()
 
+    logger.info(
+        "[generate_email_drafts] sender_name_raw=%r sender=%r title=%r has_notes=%s has_instructions=%s last_touch=%r",
+        sender_name,
+        sender,
+        title,
+        bool(notes),
+        bool(instructions),
+        last_touch,
+    )
+
     if not notes and not title and not instructions:
         fallback = "No context provided. Add client notes, a task title, or email instructions and try again."
         return (

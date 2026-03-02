@@ -83,7 +83,6 @@ import {
   type GmailSearchFolder,
 } from '@/lib/api/gmail';
 import { getGmailStatus } from '@/lib/api/integrations';
-import { useAuth } from '@/contexts/AuthContext';
 
 const DEBOUNCE_MS = 300;
 
@@ -812,13 +811,11 @@ function contactDisplayName(c: Contact): string {
 function ActivityPageContent(): React.ReactElement {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user } = useAuth() as { user: { user_metadata?: { full_name?: string } } | null };
   const activityId = searchParams.get('id');
   const urlContactId = searchParams.get('contact_id');
   const urlCompanyId = searchParams.get('company_id');
   const urlContactName = searchParams.get('contact_name');
   const urlAccountName = searchParams.get('account_name');
-  const senderName = (user?.user_metadata as { full_name?: string } | undefined)?.full_name ?? '';
 
   // Initial contact/account from URL so they appear immediately when opening from Dashboard (no wait for getActivity or communication summary)
   const initialContactName = urlContactName ? decodeURIComponent(urlContactName) : '';
@@ -1446,7 +1443,7 @@ function ActivityPageContent(): React.ReactElement {
         client_notes: clientNotes,
         task_title: subject.trim(),
         last_touch_date: activity?.updated_at ?? null,
-        sender_name: senderName || null,
+        sender_name: null,
       });
       setDrafts((prev) => ({ ...prev, ...res.drafts }));
       setSuggestedSubjectFromDrafts(res.suggested_subject ?? '');

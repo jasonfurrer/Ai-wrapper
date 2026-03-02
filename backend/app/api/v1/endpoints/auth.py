@@ -197,6 +197,7 @@ async def update_password(
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/userinfo.profile",  # Gmail account display name for email sign-offs
 ]
 
 
