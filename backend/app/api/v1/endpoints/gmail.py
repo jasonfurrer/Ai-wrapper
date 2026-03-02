@@ -5,6 +5,9 @@ Gmail API endpoints: test connection, search, get message, extract contact, send
 import base64
 import logging
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -302,11 +305,19 @@ class GenerateActivityNoteRequest(BaseModel):
     message_id: str
 
 
+class SendEmailAttachment(BaseModel):
+    """One attachment: base64-encoded content, filename, and MIME type."""
+    filename: str
+    content_base64: str
+    content_type: str = "application/octet-stream"
+
+
 class SendEmailRequest(BaseModel):
     """Request body for POST /gmail/send. From is the connected Gmail account."""
     to: str
     subject: str
     body: str
+    attachments: List[SendEmailAttachment] = []
 
 
 @router.post("/generate-activity-note")
@@ -455,12 +466,34 @@ async def gmail_send(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not determine sender email. Try reconnecting Gmail.",
         )
+    attachments = body.attachments or []
     try:
-        message = MIMEText(body_text, "plain", "utf-8")
-        message["To"] = to_addr
-        message["From"] = from_email
-        message["Subject"] = subject
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        if attachments:
+            message = MIMEMultipart("mixed")
+            message["To"] = to_addr
+            message["From"] = from_email
+            message["Subject"] = subject
+            body_part = MIMEText(body_text, "plain", "utf-8")
+            message.attach(body_part)
+            for att in attachments:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(base64.b64decode(att.content_base64))
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename=att.filename or "attachment",
+                )
+                if att.content_type and att.content_type != "application/octet-stream":
+                    part.set_type(att.content_type)
+                message.attach(part)
+            raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        else:
+            message = MIMEText(body_text, "plain", "utf-8")
+            message["To"] = to_addr
+            message["From"] = from_email
+            message["Subject"] = subject
+            raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         sent = service.users().messages().send(userId="me", body={"raw": raw}).execute()
         return {"id": sent.get("id"), "message": "Email sent"}
     except Exception as e:

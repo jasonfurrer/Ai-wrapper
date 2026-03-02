@@ -110,10 +110,17 @@ export async function gmailGenerateActivityNote(messageId: string): Promise<Gene
   return res.json() as Promise<GenerateActivityNoteResponse>;
 }
 
+export interface GmailSendAttachment {
+  filename: string;
+  content_base64: string;
+  content_type: string;
+}
+
 export interface GmailSendRequest {
   to: string;
   subject: string;
   body: string;
+  attachments?: GmailSendAttachment[];
 }
 
 export interface GmailSendResponse {
@@ -123,14 +130,18 @@ export interface GmailSendResponse {
 
 export async function gmailSendEmail(data: GmailSendRequest): Promise<GmailSendResponse> {
   const headers = await getAuthHeaders();
+  const payload: Record<string, unknown> = {
+    to: data.to.trim(),
+    subject: data.subject.trim(),
+    body: data.body,
+  };
+  if (data.attachments?.length) {
+    payload.attachments = data.attachments;
+  }
   const res = await fetch(buildApiUrl('/api/v1/gmail/send'), {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      to: data.to.trim(),
-      subject: data.subject.trim(),
-      body: data.body,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const text = await res.text();

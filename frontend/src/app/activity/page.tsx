@@ -19,6 +19,7 @@ import {
   Pencil,
   X,
   Send,
+  Paperclip,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Calendar } from '@/components/ui/calendar';
@@ -895,6 +896,8 @@ function ActivityPageContent(): React.ReactElement {
   const [composeFrom, setComposeFrom] = React.useState('');
   const [composeSubject, setComposeSubject] = React.useState('');
   const [composeBody, setComposeBody] = React.useState('');
+  const [composeAttachments, setComposeAttachments] = React.useState<File[]>([]);
+  const composeFileInputRef = React.useRef<HTMLInputElement>(null);
   const [suggestedSubjectFromDrafts, setSuggestedSubjectFromDrafts] = React.useState('');
   const [importSectionRefreshTrigger, setImportSectionRefreshTrigger] = React.useState(0);
   const [toast, setToast] = React.useState<{ open: boolean; variant: 'success' | 'error'; title: string; description?: string }>({
@@ -1374,6 +1377,7 @@ function ActivityPageContent(): React.ReactElement {
     setComposeTo(selectedContact?.email ?? '');
     setComposeSubject(suggestedSubjectFromDrafts || subject || '');
     setComposeBody(bodyText);
+    setComposeAttachments([]);
     try {
       const status = await getGmailStatus();
       setComposeFrom(status.connected && status.email ? status.email : '');
@@ -1382,6 +1386,18 @@ function ActivityPageContent(): React.ReactElement {
     }
     setEmailComposeOpen(true);
   };
+
+  const readFileAsBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const base64 = dataUrl.split(',')[1];
+        resolve(base64 ?? '');
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
 
   const handleSendEmail = async () => {
     const toAddr = composeTo.trim();
@@ -1392,9 +1408,25 @@ function ActivityPageContent(): React.ReactElement {
     }
     setComposeSending(true);
     try {
-      await gmailSendEmail({ to: toAddr, subject: subj, body: composeBody });
+      const attachments =
+        composeAttachments.length > 0
+          ? await Promise.all(
+              composeAttachments.map(async (file) => ({
+                filename: file.name,
+                content_base64: await readFileAsBase64(file),
+                content_type: file.type || 'application/octet-stream',
+              }))
+            )
+          : undefined;
+      await gmailSendEmail({
+        to: toAddr,
+        subject: subj,
+        body: composeBody,
+        attachments,
+      });
       showToast('success', 'Email sent', 'Your message was sent successfully.');
       setEmailComposeOpen(false);
+      setComposeAttachments([]);
       setImportSectionRefreshTrigger((t) => t + 1);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to send email.';
@@ -2280,7 +2312,13 @@ function ActivityPageContent(): React.ReactElement {
       </Dialog>
 
       {/* Smart compose - email editing window (Gmail-like) */}
-      <Dialog open={emailComposeOpen} onOpenChange={setEmailComposeOpen}>
+      <Dialog
+        open={emailComposeOpen}
+        onOpenChange={(open) => {
+          if (!open) setComposeAttachments([]);
+          setEmailComposeOpen(open);
+        }}
+      >
         <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0" showClose={true}>
           <DialogHeader className="px-4 pt-4 pb-2 border-b border-border">
             <DialogTitle className="text-lg">New message</DialogTitle>
@@ -2325,6 +2363,55 @@ function ActivityPageContent(): React.ReactElement {
                 placeholder="Compose your email..."
                 className="flex-1 min-h-[200px] resize-none border-0 rounded-none px-4 py-3 focus-visible:ring-0 focus-visible:ring-offset-0 text-sm"
               />
+            </div>
+            <div className="px-4 py-2 border-t border-border flex flex-wrap items-center gap-2 min-h-[40px]">
+              <input
+                ref={composeFileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = e.target.files;
+                  if (files?.length) {
+                    setComposeAttachments((prev) => [...prev, ...Array.from(files)]);
+                    e.target.value = '';
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => composeFileInputRef.current?.click()}
+              >
+                <Paperclip className="h-4 w-4" />
+                Attach files
+              </Button>
+              {composeAttachments.length > 0 && (
+                <ul className="flex flex-wrap gap-1.5 items-center">
+                  {composeAttachments.map((file, i) => (
+                    <li
+                      key={`${file.name}-${i}`}
+                      className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs"
+                    >
+                      <span className="truncate max-w-[140px]" title={file.name}>
+                        {file.name}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${file.name}`}
+                        className="shrink-0 rounded p-0.5 hover:bg-muted-foreground/20"
+                        onClick={() =>
+                          setComposeAttachments((prev) => prev.filter((_, idx) => idx !== i))
+                        }
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t border-border bg-muted/30">
               <Button type="button" variant="outline" onClick={() => setEmailComposeOpen(false)} disabled={composeSending}>
