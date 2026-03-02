@@ -771,11 +771,12 @@ export default function DashboardPage(): React.ReactElement {
         if (isCompleted && !wantCompleted) return false;
         if (!isCompleted && !wantNotCompleted) return false;
       }
-      if (!isDateInRange(a.lastTouchDate, filterApplied.dateFrom, filterApplied.dateTo))
+      // When search is active, show all search matches regardless of date; user can narrow with other filters
+      if (!isSearchMode && !isDateInRange(a.lastTouchDate, filterApplied.dateFrom, filterApplied.dateTo))
         return false;
       return true;
     });
-  }, [filteredByDate, filterApplied, completedIds]);
+  }, [filteredByDate, filterApplied, completedIds, isSearchMode]);
 
   const sortedItems = React.useMemo(
     () => sortActivities(filtered, sort),
