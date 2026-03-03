@@ -1120,6 +1120,8 @@ export default function DashboardPage(): React.ReactElement {
       if (item?.companyId) params.set('company_id', item.companyId);
       if (item?.activity.contactName) params.set('contact_name', item.activity.contactName);
       if (item?.activity.accountName) params.set('account_name', item.activity.accountName);
+      // Pass task title so Activity page shows it even when getActivity doesn't return subject
+      if (activity.subject?.trim()) params.set('task_title', activity.subject.trim());
       router.push(`/activity?${params.toString()}`);
     },
     [router, activities]

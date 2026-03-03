@@ -816,8 +816,9 @@ function ActivityPageContent(): React.ReactElement {
   const urlCompanyId = searchParams.get('company_id');
   const urlContactName = searchParams.get('contact_name');
   const urlAccountName = searchParams.get('account_name');
+  const urlTaskTitle = searchParams.get('task_title');
 
-  // Initial contact/account from URL so they appear immediately when opening from Dashboard (no wait for getActivity or communication summary)
+  // Initial contact/account/task title from URL so they appear immediately when opening from Dashboard (no wait for getActivity or communication summary)
   const initialContactName = urlContactName ? decodeURIComponent(urlContactName) : '';
   const initialAccountName = urlAccountName ? decodeURIComponent(urlAccountName) : '';
 
@@ -941,6 +942,13 @@ function ActivityPageContent(): React.ReactElement {
     setEmailDraftInstructions(stored.emailDraftInstructions ?? '');
   }, [activityId]);
 
+  // Apply task title from URL whenever present (dashboard Open passes it); always apply so it shows even when a draft with empty subject was restored
+  React.useEffect(() => {
+    if (activityId && urlTaskTitle?.trim()) {
+      setSubject(urlTaskTitle.trim());
+    }
+  }, [activityId, urlTaskTitle]);
+
   // Pre-fill contact and account from URL (dashboard Open passes these); skip if we restored from draft
   React.useEffect(() => {
     if (restoredFromDraftRef.current) return;
@@ -989,7 +997,8 @@ function ActivityPageContent(): React.ReactElement {
           setActivityLoading(false);
           return;
         }
-        if (a.subject) setSubject(a.subject);
+        // Only override subject from API when we have a non-empty value (keep URL task_title when API returns null/empty)
+        if (a.subject && String(a.subject).trim()) setSubject(String(a.subject).trim());
         const contact = a.contacts?.[0];
         const company = a.companies?.[0];
         if (contact) {
