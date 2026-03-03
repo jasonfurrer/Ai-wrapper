@@ -1502,12 +1502,16 @@ function ActivityPageContent(): React.ReactElement {
         <div className="flex flex-col gap-4 p-4">
         {/* Task title indicator when opened from Dashboard */}
         {activityId && (
-          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task Title</p>
-            <p className="text-sm font-medium text-foreground mt-0.5 truncate" title={subject || undefined}>
-              {subject || '—'}
-            </p>
-          </div>
+          <Card className="border-[1.5px]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg font-semibold">Current Task Title</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <p className="text-sm text-foreground truncate" title={subject || undefined}>
+                {subject || '—'}
+              </p>
+            </CardContent>
+          </Card>
         )}
         {/* 1. Note Editor */}
         <Card className="border-[1.5px]">
