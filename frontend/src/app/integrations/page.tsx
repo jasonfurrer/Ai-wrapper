@@ -489,24 +489,6 @@ export default function IntegrationsPage(): React.ReactElement {
                             )}
                           </CardContent>
                         </Card>
-                        <div className="mt-4 flex items-center gap-3">
-                          <Button
-                            onClick={() => handleTestConnection(int.id)}
-                            disabled={testLoading !== null}
-                            className="gap-2"
-                          >
-                            {testLoading === int.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : null}
-                            Test Connection
-                          </Button>
-                          {gmailConnected && (
-                            <span className="flex items-center gap-1.5 text-sm text-status-warm">
-                              <span className="h-2 w-2 rounded-full bg-status-warm" />
-                              Active
-                            </span>
-                          )}
-                        </div>
                       </>
                     )}
                   </CardContent>
