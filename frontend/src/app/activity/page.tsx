@@ -1328,10 +1328,14 @@ function ActivityPageContent(): React.ReactElement {
     setSubjectConfidence(0);
     setQuestionsConfidence(0);
     setDrafts({});
+    const contactFullName = [selectedContact?.first_name, selectedContact?.last_name]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
     try {
       const res = activityId
-        ? await processActivityNotes(activityId, { note_text: noteContent })
-        : await processDraft({ note_text: noteContent, previous_notes: previousNotesForSubmit || '' });
+        ? await processActivityNotes(activityId, { note_text: noteContent, contact_name: contactFullName })
+        : await processDraft({ note_text: noteContent, previous_notes: previousNotesForSubmit || '', contact_name: contactFullName });
       setProcessingStep('ready');
       setSummaryDraft(res.summary);
       setRecognisedDate({

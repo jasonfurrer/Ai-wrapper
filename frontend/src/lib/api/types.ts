@@ -178,11 +178,13 @@ export interface ContactUpdate {
 
 export interface ProcessNotesRequest {
   note_text: string;
+  contact_name?: string;
 }
 
 export interface ProcessDraftRequest {
   note_text: string;
   previous_notes?: string;
+  contact_name?: string;
 }
 
 export interface RecognisedDateOut {

@@ -1135,13 +1135,14 @@ async def process_draft(
     try:
         note_text = (body.note_text or "").strip()
         previous_notes = (body.previous_notes or "").strip()
+        contact_name = (body.contact_name or "").strip()
 
         summary = summarize_communication_history(
             (previous_notes + "\n\n" + note_text).strip() if previous_notes else note_text
         )
-        recognised = extract_recognised_date(note_text)
+        recognised = extract_recognised_date(note_text, previous_notes=previous_notes)
         recommended = recommend_touch_date(note_text, previous_notes)
-        metadata = extract_metadata(note_text, previous_notes)
+        metadata = extract_metadata(note_text, previous_notes, contact_name=contact_name)
         drafts_map = generate_drafts(note_text, previous_notes)
 
         drafts_out: dict[str, DraftOut] = {
@@ -1273,12 +1274,13 @@ async def process_notes(
                 pass
 
         note_text = (body.note_text or "").strip()
+        contact_name = (body.contact_name or "").strip()
         full_notes = (existing_body + "\n\n" + note_text).strip() if existing_body else note_text
 
         summary = summarize_communication_history(full_notes)
-        recognised = extract_recognised_date(note_text)
+        recognised = extract_recognised_date(note_text, previous_notes=existing_body)
         recommended = recommend_touch_date(note_text, existing_body)
-        metadata = extract_metadata(note_text, existing_body)
+        metadata = extract_metadata(note_text, existing_body, contact_name=contact_name)
         drafts_map = generate_drafts(note_text, existing_body)
 
         drafts_out: dict[str, DraftOut] = {

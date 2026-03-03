@@ -173,17 +173,29 @@ Notes:
 # 2. Recognised date (from note text, e.g. "next week")
 # ---------------------------------------------------------------------------
 
-def extract_recognised_date(latest_note: str, reference_date: datetime | None = None) -> dict:
+def extract_recognised_date(
+    latest_note: str,
+    previous_notes: str = "",
+    reference_date: datetime | None = None,
+) -> dict:
     """
-    Extract the due date for the upcoming task if the note mentions a specific or relative date
-    (e.g. "by Friday", "next week", "follow up on the 15th"). Returns YYYY-MM-DD and a label.
-    reference_date: use for relative phrases; default now.
+    Extract the due date for the upcoming task.
+
+    Priority:
+      1. Explicit or relative date in the current note (e.g. "by Friday", "next week").
+      2. If none found, infer a sensible date from the meeting-frequency pattern visible in
+         previous_notes (e.g. "meets every 2 weeks" → next occurrence).
+      3. Falls back to {"date": None, "label": None, "confidence": 0} if still unresolvable.
+
+    reference_date: override "today" for relative phrases; defaults to now (UTC).
     """
     if not latest_note or not latest_note.strip():
         return {"date": None, "label": None, "confidence": 0}
     ref = reference_date or datetime.now(timezone.utc)
     client = _get_client()
-    prompt = f"""You are a precise assistant that extracts the DUE DATE for an upcoming task from activity or meeting notes.
+
+    # --- Pass 1: look for a date in the current note ---
+    prompt_pass1 = f"""You are a precise assistant that extracts the DUE DATE for an upcoming task from activity or meeting notes.
 
 **Reference (today):** {ref.strftime("%Y-%m-%d")} ({ref.strftime("%A, %B %d, %Y")}).
 
@@ -201,12 +213,14 @@ def extract_recognised_date(latest_note: str, reference_date: datetime | None = 
 
 Respond with ONLY a JSON object, no other text or markdown:
 {{"date": "YYYY-MM-DD" or null, "label": "short label" or null, "confidence": number}}
-"""
+
+Note:
+{latest_note}"""
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt + "\n\nNote:\n" + latest_note}],
+            messages=[{"role": "user", "content": prompt_pass1}],
         )
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
@@ -219,13 +233,51 @@ Respond with ONLY a JSON object, no other text or markdown:
                         "label": parsed.get("label") or date_val,
                         "confidence": min(100, max(0, int(parsed.get("confidence", 70)))),
                     }
-                return {
-                    "date": None,
-                    "label": parsed.get("label"),
-                    "confidence": min(100, max(0, int(parsed.get("confidence", 0)))),
-                }
     except Exception as e:
-        logger.exception("Claude extract_recognised_date error: %s", e)
+        logger.exception("Claude extract_recognised_date pass-1 error: %s", e)
+
+    # --- Pass 2: no date in current note – infer from historical meeting frequency ---
+    if not previous_notes or not previous_notes.strip():
+        return {"date": None, "label": None, "confidence": 0}
+
+    prompt_pass2 = f"""You are an assistant that infers a DUE DATE for a follow-up task from a client's historical meeting/contact notes.
+
+**Reference (today):** {ref.strftime("%Y-%m-%d")} ({ref.strftime("%A, %B %d, %Y")}).
+
+The latest note contains no explicit date. Use the historical notes below to detect a recurring contact pattern (e.g. every 2 weeks, monthly, weekly), then project the NEXT expected contact date from today.
+
+**Rules:**
+- Scan for date-stamped entries in the historical notes to detect cadence (e.g. 01/05, 01/19, 02/02 → every 2 weeks).
+- If a clear pattern exists, project the next occurrence from today. confidence: 55-75 (inferred).
+- If the pattern is irregular or unclear, return date: null.
+- Do NOT guess — only return a date if the pattern is reasonably identifiable.
+- Return the date as YYYY-MM-DD with a short human-readable label (e.g. "In 2 weeks (pattern)", "Monthly check-in").
+
+Respond with ONLY a JSON object, no other text:
+{{"date": "YYYY-MM-DD" or null, "label": "short label" or null, "confidence": number}}
+
+Historical notes (oldest to newest):
+{previous_notes[:6000]}"""
+    try:
+        msg2 = client.messages.create(
+            model=DEFAULT_MODEL,
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt_pass2}],
+        )
+        block2 = msg2.content[0] if msg2.content else None
+        if block2 and getattr(block2, "text", None):
+            parsed2 = _parse_json_block(block2.text)
+            if isinstance(parsed2, dict):
+                date_val2 = parsed2.get("date")
+                if date_val2 and isinstance(date_val2, str) and re.match(r"\d{4}-\d{2}-\d{2}", date_val2):
+                    return {
+                        "date": date_val2,
+                        "label": parsed2.get("label") or date_val2,
+                        "confidence": min(100, max(0, int(parsed2.get("confidence", 60)))),
+                    }
+    except Exception as e:
+        logger.exception("Claude extract_recognised_date pass-2 error: %s", e)
+
     return {"date": None, "label": None, "confidence": 0}
 
 
@@ -285,14 +337,20 @@ Respond with ONLY a JSON object:
 # 4. Extracted metadata (subject, next steps, questions, urgency)
 # ---------------------------------------------------------------------------
 
-def extract_metadata(latest_note: str, previous_notes: str = "") -> dict:
+def extract_metadata(latest_note: str, previous_notes: str = "", contact_name: str = "") -> dict:
     """
     Extract subject (task title), questions raised, and urgency from the latest note.
     Uses previous notes only for context when present.
+
+    Subject priority:
+      1. A specific action explicitly stated in the note (e.g. "send him the files", "call the lawyer").
+      2. If nothing specific is identified, fall back to "Check in w/ <contact_name>" (or
+         "Check in" when no contact name is supplied).
     """
+    checkin_fallback = f"Check in w/ {contact_name.strip()}" if contact_name.strip() else "Check in"
     if not latest_note or not latest_note.strip():
         return {
-            "subject": "",
+            "subject": checkin_fallback,
             "questions_raised": "",
             "urgency": "medium",
             "subject_confidence": 0,
@@ -302,6 +360,7 @@ def extract_metadata(latest_note: str, previous_notes: str = "") -> dict:
     context = ""
     if previous_notes and previous_notes.strip():
         context = "**Previous notes (context only):**\n" + (previous_notes[:3000] + "..." if len(previous_notes) > 3000 else previous_notes) + "\n\n"
+    fallback_label = f'"{checkin_fallback}"'
     prompt = f"""You are a CRM metadata extraction agent. From the latest activity/meeting note, extract structured fields for the upcoming task. Be consistent and accurate.
 
 {context}**Latest note:**
@@ -309,13 +368,18 @@ def extract_metadata(latest_note: str, previous_notes: str = "") -> dict:
 
 **Extract and respond with ONLY a JSON object (no markdown, no explanation):**
 
-1. **subject** (string): A single, short task title for the upcoming task (e.g. "Follow-up call with Jane", "Send Q4 proposal", "Review contract"). One phrase, title case. This is the task title in the CRM.
+1. **subject** (string): The title of the NEXT / UPCOMING task.
+   - Look for an explicit, concrete action the user is going to take soon: e.g. "going to send him the files" → "Send Files", "will talk to the lawyer" → "Talk to Lawyer", "need to send the proposal by Friday" → "Send Proposal".
+   - Use title case. Keep it short (2-6 words).
+   - **IMPORTANT**: Only use a specific task title when the note clearly states something the user must DO next. Do NOT invent a task if none is stated.
+   - If no specific next action is mentioned, set subject to exactly {fallback_label}.
 
 2. **questions_raised** (string): Any open questions the contact raised or that remain unanswered. Empty string if none.
 
 3. **urgency** (string): Exactly one of "low", "medium", "high". Use "high" for time-sensitive or commitment-heavy notes; "medium" for normal follow-ups; "low" for informational or casual notes.
 
-4. **subject_confidence**, **questions_confidence** (integers 0-100): How confident you are in each extraction. 85+ when explicit in the note; 50-84 when inferred; below 50 when vague.
+4. **subject_confidence** (integer 0-100): 85+ when a specific task is clearly stated; 60-84 when inferred; set to 40 when falling back to {fallback_label}.
+5. **questions_confidence** (integer 0-100): 85+ when explicit; 50-84 when inferred; below 50 when vague.
 
 **Output format (JSON only):**
 {{"subject": "...", "questions_raised": "...", "urgency": "low"|"medium"|"high", "subject_confidence": number, "questions_confidence": number}}
@@ -333,8 +397,9 @@ def extract_metadata(latest_note: str, previous_notes: str = "") -> dict:
                 urgency = (parsed.get("urgency") or "medium").lower()
                 if urgency not in ("low", "medium", "high"):
                     urgency = "medium"
+                subject = (parsed.get("subject") or "").strip() or checkin_fallback
                 return {
-                    "subject": (parsed.get("subject") or "").strip() or "Follow-up",
+                    "subject": subject,
                     "questions_raised": (parsed.get("questions_raised") or "").strip(),
                     "urgency": urgency,
                     "subject_confidence": min(100, max(0, int(parsed.get("subject_confidence", 70)))),
@@ -343,10 +408,10 @@ def extract_metadata(latest_note: str, previous_notes: str = "") -> dict:
     except Exception as e:
         logger.exception("Claude extract_metadata error: %s", e)
     return {
-        "subject": "Follow-up",
+        "subject": checkin_fallback,
         "questions_raised": "",
         "urgency": "medium",
-        "subject_confidence": 50,
+        "subject_confidence": 40,
         "questions_confidence": 50,
     }
 

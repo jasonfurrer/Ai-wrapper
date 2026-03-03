@@ -114,12 +114,14 @@ class SyncStatusResponse(BaseModel):
 class ProcessNotesRequest(BaseModel):
     """Request body for POST /activities/{id}/process-notes."""
     note_text: str = ""
+    contact_name: str = ""  # Used for "Check in w/ <name>" fallback subject
 
 
 class ProcessDraftRequest(BaseModel):
     """Request body for POST /activities/process-draft (no activity id; e.g. new activity)."""
     note_text: str = ""
     previous_notes: str = ""
+    contact_name: str = ""  # Used for "Check in w/ <name>" fallback subject
 
 
 class RecognisedDateOut(BaseModel):
