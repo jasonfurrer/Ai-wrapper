@@ -258,6 +258,7 @@ async def gmail_connect(
             }
         },
         scopes=GMAIL_SCOPES,
+        autogenerate_code_verifier=False,
     )
     flow.redirect_uri = settings.google_redirect_uri
     authorization_url, _ = flow.authorization_url(
@@ -314,6 +315,7 @@ async def gmail_callback(
             }
         },
         scopes=GMAIL_SCOPES,
+        autogenerate_code_verifier=False,
     )
     flow.redirect_uri = settings.google_redirect_uri
     try:
