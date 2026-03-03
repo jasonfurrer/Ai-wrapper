@@ -121,7 +121,7 @@ function IntegrationTileSkeleton() {
   );
 }
 
-export default function IntegrationsPage(): React.ReactElement {
+function IntegrationsPageInner(): React.ReactElement {
   const searchParams = useSearchParams();
   const [tilesLoading, setTilesLoading] = React.useState(!integrationsLoadedOnce);
   React.useEffect(() => {
@@ -776,5 +776,13 @@ export default function IntegrationsPage(): React.ReactElement {
       </Toast>
     </div>
     </ProtectedRoute>
+  );
+}
+
+export default function IntegrationsPage(): React.ReactElement {
+  return (
+    <React.Suspense fallback={null}>
+      <IntegrationsPageInner />
+    </React.Suspense>
   );
 }
