@@ -518,7 +518,17 @@ function ImportFromCommunicationSection({
   const [extractedData, setExtractedData] = React.useState<ExtractedContact | null>(null);
   const [extractedDialogOpen, setExtractedDialogOpen] = React.useState(false);
   const [noteError, setNoteError] = React.useState<string | null>(null);
+  const [gmailConnected, setGmailConnected] = React.useState<boolean | null>(null);
   const debouncedEmailQuery = useDebouncedValue(emailSearchQuery.trim(), 400);
+
+  // Know if Gmail is connected so we can show "Connect Gmail" hint when no emails are due to missing connection.
+  React.useEffect(() => {
+    let cancelled = false;
+    getGmailStatus()
+      .then((data) => { if (!cancelled) setGmailConnected(data.connected); })
+      .catch(() => { if (!cancelled) setGmailConnected(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Load latest emails on mount, when date filter changes, or when refreshTrigger changes (e.g. after sending an email).
   React.useEffect(() => {
@@ -719,9 +729,20 @@ function ImportFromCommunicationSection({
           </ul>
         )}
         {!extractLoading && emailSearchResults.length === 0 && !emailSearchLoading && !initialRecentLoading && (
-          <p className="text-xs text-muted-foreground py-1">
-            {debouncedEmailQuery ? 'No emails found. Try different keywords.' : 'No recent emails in this view.'}
-          </p>
+          gmailConnected === false ? (
+            <div className="rounded-md border border-border bg-muted/40 p-2.5 space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Connect your Gmail in Connection settings to search and import from your inbox.
+              </p>
+              <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" asChild>
+                <Link href="/integrations?expand=email">Connection settings → Email Inbox</Link>
+              </Button>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground py-1">
+              {debouncedEmailQuery ? 'No emails found. Try different keywords.' : 'No recent emails in this view.'}
+            </p>
+          )
         )}
       </CardContent>
 

@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useSearchParams } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import {
   Building2,
@@ -121,6 +122,7 @@ function IntegrationTileSkeleton() {
 }
 
 export default function IntegrationsPage(): React.ReactElement {
+  const searchParams = useSearchParams();
   const [tilesLoading, setTilesLoading] = React.useState(!integrationsLoadedOnce);
   React.useEffect(() => {
     if (integrationsLoadedOnce) {
@@ -134,6 +136,26 @@ export default function IntegrationsPage(): React.ReactElement {
     return () => clearTimeout(t);
   }, []);
   const [expandedSettings, setExpandedSettings] = React.useState<IntegrationId | null>(null);
+
+  const connectionSettingsRef = React.useRef<HTMLDivElement>(null);
+
+  // Deep-link: open Email Inbox connection settings when ?expand=email, then scroll to it
+  React.useEffect(() => {
+    if (searchParams.get('expand') === 'email') {
+      setExpandedSettings('email');
+    }
+  }, [searchParams]);
+
+  // After expanding email via ?expand=email, scroll Connection Settings into view
+  React.useEffect(() => {
+    if (searchParams.get('expand') !== 'email' || expandedSettings !== 'email') return;
+    const el = connectionSettingsRef.current;
+    if (!el) return;
+    const t = requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    return () => cancelAnimationFrame(t);
+  }, [searchParams, expandedSettings]);
   const [testLoading, setTestLoading] = React.useState<IntegrationId | null>(null);
   const [syncLogFilter, setSyncLogFilter] = React.useState<'all' | SyncStatus>('all');
   const [syncLogSource, setSyncLogSource] = React.useState<'all' | 'hubspot' | 'email'>('all');
@@ -359,7 +381,7 @@ export default function IntegrationsPage(): React.ReactElement {
       </section>
 
       {/* Connection Settings (collapsible per integration) */}
-      <section className="rounded-xl bg-section border border-border p-5">
+      <section ref={connectionSettingsRef} className="rounded-xl bg-section border border-border p-5">
         <h2 className="text-lg font-semibold mb-4">Connection Settings</h2>
         <div className="space-y-2">
           {INTEGRATIONS.map((int) => {

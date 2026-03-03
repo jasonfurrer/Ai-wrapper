@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { Suspense } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
+import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Loader2, X, Users, Search, Pencil, Trash2, Info, CalendarIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -54,6 +55,7 @@ import {
   type ExtractedContact,
   type GmailSearchFolder,
 } from '@/lib/api/gmail';
+import { getGmailStatus } from '@/lib/api/integrations';
 
 /** Filter messages by All / Inbox / Sent using each message's folder tag (from backend). */
 function filterMessagesByFolder(
@@ -736,7 +738,17 @@ function ImportFromCommunicationColumn({
   const [extractLoading, setExtractLoading] = React.useState(false);
   const [extractedData, setExtractedData] = React.useState<ExtractedContact | null>(null);
   const [extractedDialogOpen, setExtractedDialogOpen] = React.useState(false);
+  const [gmailConnected, setGmailConnected] = React.useState<boolean | null>(null);
   const debouncedEmailQuery = useDebouncedValue(emailSearchQuery.trim(), 400);
+
+  // Know if Gmail is connected so we can show "Connect Gmail" hint when no emails are due to missing connection.
+  React.useEffect(() => {
+    let cancelled = false;
+    getGmailStatus()
+      .then((data) => { if (!cancelled) setGmailConnected(data.connected); })
+      .catch(() => { if (!cancelled) setGmailConnected(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Load latest emails on mount and when date filter changes (no search query) so the results section is pre-populated.
   React.useEffect(() => {
@@ -921,9 +933,20 @@ function ImportFromCommunicationColumn({
               </ul>
             )}
             {!extractLoading && emailSearchResults.length === 0 && !emailSearchLoading && !initialRecentLoading && (
-              <p className="text-sm text-muted-foreground py-2">
-                {debouncedEmailQuery ? 'No emails found. Try different keywords.' : 'No recent emails in this view.'}
-              </p>
+              gmailConnected === false ? (
+                <div className="rounded-md border border-border bg-muted/40 p-3 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Connect your Gmail in Connection settings to search and import from your inbox.
+                  </p>
+                  <Button variant="outline" size="sm" className="gap-1.5" asChild>
+                    <Link href="/integrations?expand=email">Connection settings → Email Inbox</Link>
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground py-2">
+                  {debouncedEmailQuery ? 'No emails found. Try different keywords.' : 'No recent emails in this view.'}
+                </p>
+              )
             )}
           </div>
         </CardContent>
