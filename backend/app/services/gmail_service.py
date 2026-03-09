@@ -1,6 +1,6 @@
 """
 Gmail API: load tokens from DB, build authenticated client with auto-refresh.
-Uses google-auth-oauthlib and google-api-python-client.
+Uses google-auth-oauthlib and google-api-python-client..
 """
 
 import logging
