@@ -128,7 +128,7 @@ async def catch_exceptions(request: Request, call_next):
         )
 
 
-# Root and health (outside versioning)
+# Root and health (outside versioning))
 @app.get("/")
 def root():
     return {
