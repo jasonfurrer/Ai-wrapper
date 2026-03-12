@@ -1513,7 +1513,59 @@ function ActivityPageContent(): React.ReactElement {
             </CardContent>
           </Card>
         )}
-        {/* 1. Note Editor */}
+        {/* Quick Actions */}
+        <Card className="border-[1.5px]">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold">Quick Actions</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {activityId ? (
+              <label className="flex items-center gap-2 cursor-pointer text-sm text-foreground hover:text-foreground/90">
+                <Checkbox
+                  checked={markCompleteSelected}
+                  onCheckedChange={(checked) => setMarkCompleteSelected(checked === true)}
+                />
+                <span>Mark as complete</span>
+              </label>
+            ) : null}
+            <Button
+              className="w-full"
+              onClick={() => setSubmitConfirmOpen(true)}
+              disabled={
+                activityLoading ||
+                (activityId
+                  ? !(
+                      markCompleteSelected ||
+                      (noteContent.trim() &&
+                        subject.trim() &&
+                        (selectedContact?.id ?? activity?.contacts?.[0]?.id) &&
+                        (selectedAccount?.id ?? activity?.companies?.[0]?.id) &&
+                        !!dueDate)
+                    )
+                  : !(
+                      noteContent.trim() &&
+                      subject.trim() &&
+                      selectedContact &&
+                      selectedAccount &&
+                      !!dueDate
+                    ))
+              }
+            >
+              {activityId ? 'Submit Activity' : 'Create Activity'}
+            </Button>
+            {!activityId && !activityLoading && !(noteContent.trim() && subject.trim() && selectedContact && selectedAccount && dueDate) ? (
+              <p className="text-xs text-muted-foreground mt-2">
+                Fill in meeting notes, subject, contact, account, and due date to create a new activity.
+              </p>
+            ) : activityId && !markCompleteSelected && !(noteContent.trim() && subject.trim() && (selectedContact?.id ?? activity?.contacts?.[0]?.id) && (selectedAccount?.id ?? activity?.companies?.[0]?.id) && dueDate) ? (
+              <p className="text-xs text-muted-foreground mt-2">
+                Fill in meeting notes, subject, contact, account, and due date to update the activity.
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        {/* Task Notes */}
         <Card className="border-[1.5px]">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg font-semibold">Task Notes</CardTitle>
@@ -1571,51 +1623,6 @@ function ActivityPageContent(): React.ReactElement {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
-          </CardContent>
-        </Card>
-
-        {/* Email Draft Instructions */}
-        <Card className="border-[1.5px]">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg font-semibold">Email Draft Instructions</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <Textarea
-              placeholder="Instructions for email drafts (e.g. tone, key points to include)..."
-              value={emailDraftInstructions}
-              onChange={(e) => setEmailDraftInstructions(e.target.value)}
-              className="min-h-[120px] resize-y"
-            />
-            {generateDraftsError && (
-              <p className="mt-2 text-sm text-status-at-risk">{generateDraftsError}</p>
-            )}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="default"
-                onClick={handleGenerateEmailDrafts}
-                disabled={generateDraftsLoading}
-                className="gap-2"
-              >
-                {generateDraftsLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Generating…
-                  </>
-                ) : (
-                  'Generate drafts'
-                )}
-              </Button>
-              {!generateDraftsLoading && (drafts.warm?.text || drafts.concise?.text || drafts.formal?.text) && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => smartComposeSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                >
-                  Check drafts
-                </Button>
-              )}
-            </div>
           </CardContent>
         </Card>
 
@@ -1766,55 +1773,48 @@ function ActivityPageContent(): React.ReactElement {
           </CardContent>
         </Card>
 
-        {/* 4. Quick Actions */}
+        {/* Email Draft Instructions */}
         <Card className="border-[1.5px]">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">Quick Actions</CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg font-semibold">Email Draft Instructions</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {activityId ? (
-              <label className="flex items-center gap-2 cursor-pointer text-sm text-foreground hover:text-foreground/90">
-                <Checkbox
-                  checked={markCompleteSelected}
-                  onCheckedChange={(checked) => setMarkCompleteSelected(checked === true)}
-                />
-                <span>Mark as complete</span>
-              </label>
-            ) : null}
-            <Button
-              className="w-full"
-              onClick={() => setSubmitConfirmOpen(true)}
-              disabled={
-                activityLoading ||
-                (activityId
-                  ? !(
-                      markCompleteSelected ||
-                      (noteContent.trim() &&
-                        subject.trim() &&
-                        (selectedContact?.id ?? activity?.contacts?.[0]?.id) &&
-                        (selectedAccount?.id ?? activity?.companies?.[0]?.id) &&
-                        !!dueDate)
-                    )
-                  : !(
-                      noteContent.trim() &&
-                      subject.trim() &&
-                      selectedContact &&
-                      selectedAccount &&
-                      !!dueDate
-                    ))
-              }
-            >
-              {activityId ? 'Submit Activity' : 'Create Activity'}
-            </Button>
-            {!activityId && !activityLoading && !(noteContent.trim() && subject.trim() && selectedContact && selectedAccount && dueDate) ? (
-              <p className="text-xs text-muted-foreground mt-2">
-                Fill in meeting notes, subject, contact, account, and due date to create a new activity.
-              </p>
-            ) : activityId && !markCompleteSelected && !(noteContent.trim() && subject.trim() && (selectedContact?.id ?? activity?.contacts?.[0]?.id) && (selectedAccount?.id ?? activity?.companies?.[0]?.id) && dueDate) ? (
-              <p className="text-xs text-muted-foreground mt-2">
-                Fill in meeting notes, subject, contact, account, and due date to update the activity.
-              </p>
-            ) : null}
+          <CardContent className="pt-0">
+            <Textarea
+              placeholder="Instructions for email drafts (e.g. tone, key points to include)..."
+              value={emailDraftInstructions}
+              onChange={(e) => setEmailDraftInstructions(e.target.value)}
+              className="min-h-[120px] resize-y"
+            />
+            {generateDraftsError && (
+              <p className="mt-2 text-sm text-status-at-risk">{generateDraftsError}</p>
+            )}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="default"
+                onClick={handleGenerateEmailDrafts}
+                disabled={generateDraftsLoading}
+                className="gap-2"
+              >
+                {generateDraftsLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Generating…
+                  </>
+                ) : (
+                  'Generate drafts'
+                )}
+              </Button>
+              {!generateDraftsLoading && (drafts.warm?.text || drafts.concise?.text || drafts.formal?.text) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => smartComposeSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                >
+                  Check drafts
+                </Button>
+              )}
+            </div>
           </CardContent>
         </Card>
         </div>
@@ -1881,7 +1881,74 @@ function ActivityPageContent(): React.ReactElement {
           </CardContent>
         </Card>
 
-        {/* 2. Dates (Activity Date + Due Date) */}
+        {/* AI-Generated Notes */}
+        <Card className="border-[1.5px]">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold">AI-Generated Notes</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(processingStep === 'sent' || processingStep === 'extracting') ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <span className="text-sm">Processing...</span>
+              </div>
+            ) : (
+              <>
+                {(['original', 'formal', 'concise', 'detailed'] as const).map((tone) => {
+                  const draft = drafts[tone];
+                  if (!draft) return null;
+                  const isSelected = selectedDraftTone === tone;
+                  return (
+                    <div
+                      key={tone}
+                      className={cn(
+                        'rounded-lg border-2 p-3 shadow-sm transition-shadow duration-200 bg-card',
+                        isSelected ? 'border-primary shadow-card-hover' : 'border-border hover:shadow-card-hover'
+                      )}
+                    >
+                      <div className="flex justify-between items-start gap-2 mb-2">
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary">
+                          {DRAFT_TONE_LABELS[tone]}
+                        </span>
+                        <span className="text-xs text-muted-foreground shrink-0">
+                          {draft.confidence}%
+                        </span>
+                      </div>
+                      <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
+                        {draft.text}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setSelectedDraftTone(tone);
+                            setNoteContent(draft.text);
+                          }}
+                        >
+                          Select
+                        </Button>
+                        {tone !== 'original' && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="gap-1"
+                            onClick={() => openPreview(tone)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Edit
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Dates (Activity Date + Due Date) */}
         <Card className="border-[1.5px]">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg font-semibold">Dates</CardTitle>
@@ -2085,73 +2152,6 @@ function ActivityPageContent(): React.ReactElement {
                   </button>
                 );
               })
-            )}
-          </CardContent>
-        </Card>
-
-        {/* 5. AI-Generated Drafts */}
-        <Card className="border-[1.5px]">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">AI-Generated Notes</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {(processingStep === 'sent' || processingStep === 'extracting') ? (
-              <div className="flex flex-col items-center justify-center py-8 gap-3 text-muted-foreground">
-                <Loader2 className="h-8 w-8 animate-spin" />
-                <span className="text-sm">Processing...</span>
-              </div>
-            ) : (
-              <>
-                {(['original', 'formal', 'concise', 'detailed'] as const).map((tone) => {
-                  const draft = drafts[tone];
-                  if (!draft) return null;
-                  const isSelected = selectedDraftTone === tone;
-                  return (
-                    <div
-                      key={tone}
-                      className={cn(
-                        'rounded-lg border-2 p-3 shadow-sm transition-shadow duration-200 bg-card',
-                        isSelected ? 'border-primary shadow-card-hover' : 'border-border hover:shadow-card-hover'
-                      )}
-                    >
-                      <div className="flex justify-between items-start gap-2 mb-2">
-                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-secondary">
-                          {DRAFT_TONE_LABELS[tone]}
-                        </span>
-                        <span className="text-xs text-muted-foreground shrink-0">
-                          {draft.confidence}%
-                        </span>
-                      </div>
-                      <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
-                        {draft.text}
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setSelectedDraftTone(tone);
-                            setNoteContent(draft.text);
-                          }}
-                        >
-                          Select
-                        </Button>
-                        {tone !== 'original' && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="gap-1"
-                            onClick={() => openPreview(tone)}
-                          >
-                            <Pencil className="h-4 w-4" />
-                            Edit
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </>
             )}
           </CardContent>
         </Card>
