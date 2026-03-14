@@ -140,6 +140,10 @@ async def _get_gmail_credentials(user_id: str, supabase: SupabaseService) -> Opt
             )
         except Exception as e:
             logger.error("Gmail token refresh failed for user %s: %s", user_id, e)
+            # If refresh token is permanently invalid, clear stored tokens so UI shows "Connect Gmail".
+            err_text = (str(e) + " " + " ".join(str(a) for a in getattr(e, "args", []))).lower()
+            if "invalid_grant" in err_text or "expired or revoked" in err_text:
+                await supabase.delete_gmail_tokens(user_id)
             return None
 
     return creds
