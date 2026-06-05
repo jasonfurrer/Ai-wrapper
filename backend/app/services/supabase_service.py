@@ -605,7 +605,7 @@ class SupabaseService:
         try:
             response = (
                 self.client.table("gmail_tokens")
-                .select("access_token, refresh_token, token_expiry, last_connected_at, email")
+                .select("access_token, refresh_token, token_expiry, last_connected_at, email, display_name")
                 .eq("user_id", user_id)
                 .limit(1)
                 .execute()
@@ -625,6 +625,7 @@ class SupabaseService:
         token_expiry: Optional[Union[datetime, str]] = None,
         last_connected_at: Optional[datetime] = None,
         email: Optional[str] = None,
+        display_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Insert or update Gmail tokens for user. Pass last_connected_at and email when user completes OAuth connect. token_expiry can be an ISO str (with timezone) or datetime."""
         try:
@@ -643,6 +644,8 @@ class SupabaseService:
                 row["last_connected_at"] = last_connected_at.isoformat().replace("+00:00", "Z")
             if email is not None:
                 row["email"] = email
+            if display_name is not None:
+                row["display_name"] = display_name
             response = (
                 self.client.table("gmail_tokens")
                 .upsert(row, on_conflict="user_id")

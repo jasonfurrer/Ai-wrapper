@@ -333,6 +333,7 @@ async def gmail_callback(
             token_expiry = token_expiry.replace(tzinfo=timezone.utc)
         else:
             token_expiry = token_expiry.astimezone(timezone.utc)
+        credentials.expiry = token_expiry  # patch so google-auth doesn't compare naive vs aware
     # Convert to ISO string with timezone before saving so Supabase stores it correctly (e.g. "2025-02-17T12:00:00+00:00")
     token_expiry_iso = token_expiry.isoformat() if token_expiry else None
 
@@ -346,8 +347,29 @@ async def gmail_callback(
     except Exception as e:
         logger.warning("Could not fetch Gmail profile for email: %s", e)
 
+    # Fetch display name via People API — credentials here have userinfo.profile scope (fresh OAuth)
+    gmail_display_name = None
+    try:
+        from googleapiclient.discovery import build as _build
+        people_service = _build("people", "v1", credentials=credentials)
+        person = people_service.people().get(
+            resourceName="people/me",
+            personFields="names",
+        ).execute()
+        names = person.get("names") or []
+        if names:
+            entry = names[0]
+            display = (entry.get("displayName") or entry.get("display_name") or "").strip()
+            if not display:
+                given = (entry.get("givenName") or entry.get("given_name") or "").strip()
+                family = (entry.get("familyName") or entry.get("family_name") or "").strip()
+                display = " ".join([given, family]).strip()
+            gmail_display_name = display or None
+        logger.info("Fetched display name from People API for user %s: %r", user_id, gmail_display_name)
+    except Exception as e:
+        logger.warning("Could not fetch display name from People API: %s", e)
+
     now_utc = datetime.now(timezone.utc)
-    print(f"Saving token_expiry: {token_expiry}, type: {type(token_expiry)}")  # noqa: T201
     await supabase.upsert_gmail_tokens(
         user_id=user_id,
         access_token=credentials.token or "",
@@ -355,6 +377,7 @@ async def gmail_callback(
         token_expiry=token_expiry_iso,
         last_connected_at=now_utc,
         email=gmail_email,
+        display_name=gmail_display_name,
     )
     return RedirectResponse(url=f"{frontend_url}/integrations", status_code=302)
 

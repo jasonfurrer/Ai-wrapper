@@ -130,6 +130,27 @@ async def _get_gmail_credentials(user_id: str, supabase: SupabaseService) -> Opt
                         logger.info("Backfilled Gmail email for user %s (on token refresh)", user_id)
                 except Exception as e:
                     logger.debug("Could not fetch Gmail profile for email backfill: %s", e)
+            display_name_to_save = (row.get("display_name") or "").strip() or None
+            if not display_name_to_save:
+                try:
+                    people_service = build("people", "v1", credentials=creds)
+                    person = people_service.people().get(
+                        resourceName="people/me",
+                        personFields="names",
+                    ).execute()
+                    names = person.get("names") or []
+                    if names:
+                        entry = names[0]
+                        display = (entry.get("displayName") or entry.get("display_name") or "").strip()
+                        if not display:
+                            given = (entry.get("givenName") or entry.get("given_name") or "").strip()
+                            family = (entry.get("familyName") or entry.get("family_name") or "").strip()
+                            display = " ".join([given, family]).strip()
+                        display_name_to_save = display or None
+                    if display_name_to_save:
+                        logger.info("Backfilled Gmail display_name for user %s (on token refresh)", user_id)
+                except Exception as e:
+                    logger.debug("Could not fetch display name for backfill on token refresh: %s", e)
             await supabase.upsert_gmail_tokens(
                 user_id=user_id,
                 access_token=creds.token or "",
@@ -137,6 +158,7 @@ async def _get_gmail_credentials(user_id: str, supabase: SupabaseService) -> Opt
                 token_expiry=token_expiry_for_db,
                 last_connected_at=last_connected_dt,
                 email=email_to_save or row.get("email"),
+                display_name=display_name_to_save or row.get("display_name"),
             )
         except Exception as e:
             logger.error("Gmail token refresh failed for user %s: %s", user_id, e)
@@ -183,7 +205,15 @@ async def get_gmail_user_display_name(user_id: str, supabase: SupabaseService) -
     Used for email draft sign-offs (e.g. "Best regards, John Smith").
     Returns None if Gmail is not connected or both strategies fail.
     """
-    logger.info("[get_gmail_user_display_name] user_id=%s: fetching Gmail credentials", user_id[:8])
+    logger.info("[get_gmail_user_display_name] user_id=%s: checking DB for cached display_name", user_id[:8])
+    row = await supabase.get_gmail_tokens(user_id)
+    if row:
+        cached_name = (row.get("display_name") or "").strip()
+        if cached_name:
+            logger.info("[get_gmail_user_display_name] user_id=%s: returning cached display_name from DB", user_id[:8])
+            return cached_name
+
+    logger.info("[get_gmail_user_display_name] user_id=%s: no cached name, fetching via API", user_id[:8])
     creds = await _get_gmail_credentials(user_id, supabase)
     if not creds:
         logger.warning(
