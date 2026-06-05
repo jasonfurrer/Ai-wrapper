@@ -931,7 +931,7 @@ async def get_communication_summary(
         if stored_is_error:
             logger.info("[communication-summary] stored summary was error fallback, regenerating")
         logger.info("[communication-summary] calling generate_communication_summary (notes_len=%s)", len(full_notes))
-        result = generate_communication_summary(full_notes)
+        result = await asyncio.to_thread(generate_communication_summary, full_notes)
         logger.info(
             "[communication-summary] agent returned summary_len=%s times_contacted=%s relationship_status=%s",
             len(result.get("summary", "")),
@@ -1311,7 +1311,8 @@ async def generate_smart_compose_drafts(
         else:
             logger.info("[generate-email-drafts] no sender_name available (Gmail + request both empty)")
 
-        drafts_map, suggested_subject = generate_email_drafts(
+        drafts_map, suggested_subject = await asyncio.to_thread(
+            generate_email_drafts,
             email_instructions=body.email_instructions or "",
             client_notes=body.client_notes or "",
             task_title=body.task_title or "",
@@ -1830,7 +1831,8 @@ async def regenerate_draft(
 ) -> DraftOut:
     """POST /api/v1/activities/{activity_id}/regenerate-draft — regenerate a single draft (e.g. formal)."""
     try:
-        result = regenerate_single_draft(
+        result = await asyncio.to_thread(
+            regenerate_single_draft,
             body.current_note,
             body.previous_notes,
             body.tone,

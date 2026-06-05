@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+import anthropic
 from anthropic import Anthropic
 import requests
 
@@ -27,6 +28,28 @@ CONSUMER_EMAIL_DOMAINS = frozenset({
 # Default model for all agents
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_MAX_TOKENS = 2048
+
+_TRANSIENT_ANTHROPIC_ERRORS = (
+    anthropic.RateLimitError,
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+    anthropic.InternalServerError,
+)
+
+
+def _with_retry(fn):
+    """Call fn() up to 4 times on transient Anthropic errors (1/2/4 s backoff)."""
+    exc: Exception | None = None
+    for attempt in range(4):
+        if exc is not None:
+            wait = 2 ** (attempt - 1)  # 1, 2, 4 seconds
+            logger.warning("[_with_retry] transient %s, waiting %ds (attempt %d/4)", type(exc).__name__, wait, attempt)
+            time.sleep(wait)
+        try:
+            return fn()
+        except _TRANSIENT_ANTHROPIC_ERRORS as e:
+            exc = e
+    raise exc  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -327,12 +350,13 @@ def generate_communication_summary(full_notes: str) -> dict:
     try:
         client = _get_client()
         logger.info("[generate_communication_summary] calling Claude API model=%s", DEFAULT_MODEL)
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=DEFAULT_MAX_TOKENS,
             system=_system_block(_SYSTEM_COMM_SUMMARY),
             messages=[{"role": "user", "content": user_msg}],
-        )
+            timeout=30.0,
+        ))
         content_blocks = getattr(msg, "content", None) or []
         logger.info("[generate_communication_summary] response received content_blocks=%s", len(content_blocks))
         text = _get_first_text_from_message(msg)
@@ -419,12 +443,13 @@ def extract_recognised_date(
         f"Note:\n{latest_note}"
     )
     try:
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=512,
             system=_system_block(_SYSTEM_DATE_PASS1),
             messages=[{"role": "user", "content": user_msg_pass1}],
-        )
+            timeout=30.0,
+        ))
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
             parsed = _parse_json_block(block.text)
@@ -458,12 +483,13 @@ def extract_recognised_date(
         f"Historical notes (oldest to newest):\n{previous_notes[:6000]}"
     )
     try:
-        msg2 = client.messages.create(
+        msg2 = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=512,
             system=_system_block(_SYSTEM_DATE_PASS2),
             messages=[{"role": "user", "content": user_msg_pass2}],
-        )
+            timeout=30.0,
+        ))
         block2 = msg2.content[0] if msg2.content else None
         if block2 and getattr(block2, "text", None):
             parsed2 = _parse_json_block(block2.text)
@@ -519,12 +545,13 @@ def recommend_touch_date(
     )
     _error: str | None = None
     try:
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=512,
             system=_system_block(_SYSTEM_TOUCH_DATE),
             messages=[{"role": "user", "content": user_msg}],
-        )
+            timeout=30.0,
+        ))
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
             parsed = _parse_json_block(block.text)
@@ -593,12 +620,13 @@ def extract_metadata(latest_note: str, previous_notes: str = "", contact_name: s
     )
     _error: str | None = None
     try:
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=1024,
             system=_system_block(_SYSTEM_METADATA),
             messages=[{"role": "user", "content": user_msg}],
-        )
+            timeout=30.0,
+        ))
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
             parsed = _parse_json_block(block.text)
@@ -662,12 +690,13 @@ def generate_drafts(
     _start = time.monotonic()
     _error: str | None = None
     try:
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=4096,
             system=_system_block(_SYSTEM_DRAFTS),
             messages=[{"role": "user", "content": user_msg}],
-        )
+            timeout=30.0,
+        ))
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
             parsed = _parse_json_block(block.text)
@@ -730,12 +759,13 @@ def regenerate_single_draft(
     user_msg = f"{prev_context}**Note to rewrite:**\n{original_text[:6000]}"
     _start = time.monotonic()
     try:
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=1024,
             system=system_prompt,
             messages=[{"role": "user", "content": user_msg}],
-        )
+            timeout=30.0,
+        ))
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
             parsed = _parse_json_block(block.text)
@@ -818,12 +848,13 @@ def generate_email_drafts(
     _start = time.monotonic()
     _error: str | None = None
     try:
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=4096,
             system=_system_block(_SYSTEM_EMAIL_DRAFTS),
             messages=[{"role": "user", "content": user_msg}],
-        )
+            timeout=30.0,
+        ))
         text = _get_first_text_from_message(msg)
         if not text:
             raise ValueError("No text in Claude response")
@@ -1071,13 +1102,14 @@ def extract_contact_from_email(
     _start = time.monotonic()
     _error: str | None = None
     try:
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=1024,
             temperature=0,
             system=_system_block(_SYSTEM_CONTACT_EXTRACT),
             messages=[{"role": "user", "content": user_msg}],
-        )
+            timeout=30.0,
+        ))
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
             parsed = _parse_json_block(block.text)
@@ -1193,12 +1225,13 @@ def generate_activity_note_from_email(
     )
 
     try:
-        msg = client.messages.create(
+        msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=1024,
             system=_system_block(_SYSTEM_ACTIVITY_NOTE),
             messages=[{"role": "user", "content": user_msg}],
-        )
+            timeout=30.0,
+        ))
         text = _get_first_text_from_message(msg)
         if text and text.strip():
             return (text.strip(), None, int((time.monotonic() - _start) * 1000))

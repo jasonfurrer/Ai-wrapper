@@ -2,6 +2,7 @@
 Gmail API endpoints: test connection, search, get message, extract contact, send email.
 """
 
+import asyncio
 import base64
 import logging
 from email.mime.text import MIMEText
@@ -366,7 +367,8 @@ async def gmail_generate_activity_note(
     user_email = (tokens_row.get("email") or "").strip() or None
     if not user_email:
         user_email = await _ensure_user_email_in_tokens(supabase, user_id, tokens_row, service)
-    note, llm_error, llm_duration_ms = generate_activity_note_from_email(
+    note, llm_error, llm_duration_ms = await asyncio.to_thread(
+        generate_activity_note_from_email,
         sender=email_from,
         to=email_to,
         subject=subject,
@@ -429,7 +431,8 @@ async def gmail_extract_contact(
     user_email = (tokens_row.get("email") or "").strip() or None
     if not user_email:
         user_email = await _ensure_user_email_in_tokens(supabase, user_id, tokens_row, service)
-    extracted = extract_contact_from_email(
+    extracted = await asyncio.to_thread(
+        extract_contact_from_email,
         sender=email_from,
         to=email_to,
         subject=subject,
