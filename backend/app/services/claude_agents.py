@@ -27,7 +27,7 @@ CONSUMER_EMAIL_DOMAINS = frozenset({
 
 # Default model for all agents
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
-DEFAULT_MAX_TOKENS = 2048
+DEFAULT_MAX_TOKENS = 8192
 
 _TRANSIENT_ANTHROPIC_ERRORS = (
     anthropic.RateLimitError,
@@ -341,7 +341,7 @@ def generate_communication_summary(full_notes: str) -> dict:
             "_llm_duration_ms": 0,
         }
     # Truncate notes to avoid token/size limits and API errors
-    max_notes_len = 50_000
+    max_notes_len = 100_000
     notes_to_send = (full_notes[:max_notes_len] + "...") if len(full_notes) > max_notes_len else full_notes
     user_msg = f"Notes:\n{notes_to_send}"
     content_len = len(_SYSTEM_COMM_SUMMARY) + len(user_msg)
@@ -440,12 +440,12 @@ def extract_recognised_date(
     # --- Pass 1: look for a date in the current note ---
     user_msg_pass1 = (
         f"Reference (today): {ref.strftime('%Y-%m-%d')} ({ref.strftime('%A, %B %d, %Y')}).\n\n"
-        f"Note:\n{latest_note}"
+        f"Note:\n{latest_note[:20000]}"
     )
     try:
         msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
-            max_tokens=512,
+            max_tokens=1024,
             system=_system_block(_SYSTEM_DATE_PASS1),
             messages=[{"role": "user", "content": user_msg_pass1}],
             timeout=30.0,
@@ -480,12 +480,12 @@ def extract_recognised_date(
 
     user_msg_pass2 = (
         f"Reference (today): {ref.strftime('%Y-%m-%d')} ({ref.strftime('%A, %B %d, %Y')}).\n\n"
-        f"Historical notes (oldest to newest):\n{previous_notes[:6000]}"
+        f"Historical notes (oldest to newest):\n{previous_notes[:20000]}"
     )
     try:
         msg2 = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
-            max_tokens=512,
+            max_tokens=1024,
             system=_system_block(_SYSTEM_DATE_PASS2),
             messages=[{"role": "user", "content": user_msg_pass2}],
             timeout=30.0,
@@ -536,7 +536,7 @@ def recommend_touch_date(
     ref = reference_date or datetime.now(timezone.utc)
     client = _get_client()
     # Clamp previous_notes to avoid unbounded token usage
-    prev_notes_clamped = (previous_notes[:6000] + "...") if len(previous_notes) > 6000 else previous_notes
+    prev_notes_clamped = (previous_notes[:15000] + "...") if len(previous_notes) > 15000 else previous_notes
     context = "Previous notes for this contact:\n" + prev_notes_clamped if previous_notes else "No previous notes."
     user_msg = (
         f"Reference date: {ref.strftime('%Y-%m-%d')} ({ref.strftime('%A')}).\n\n"
@@ -547,7 +547,7 @@ def recommend_touch_date(
     try:
         msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
-            max_tokens=512,
+            max_tokens=1024,
             system=_system_block(_SYSTEM_TOUCH_DATE),
             messages=[{"role": "user", "content": user_msg}],
             timeout=30.0,
@@ -611,18 +611,18 @@ def extract_metadata(latest_note: str, previous_notes: str = "", contact_name: s
     client = _get_client()
     context = ""
     if previous_notes and previous_notes.strip():
-        context = "**Previous notes (context only):**\n" + (previous_notes[:3000] + "..." if len(previous_notes) > 3000 else previous_notes) + "\n\n"
+        context = "**Previous notes (context only):**\n" + (previous_notes[:10000] + "..." if len(previous_notes) > 10000 else previous_notes) + "\n\n"
     fallback_label = f'"{checkin_fallback}"'
     user_msg = (
         f"Fallback label (use this exact text when no specific next action is stated): {fallback_label}\n\n"
         f"{context}"
-        f"**Latest note:**\n{latest_note[:8000]}"
+        f"**Latest note:**\n{latest_note[:20000]}"
     )
     _error: str | None = None
     try:
         msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
-            max_tokens=1024,
+            max_tokens=2048,
             system=_system_block(_SYSTEM_METADATA),
             messages=[{"role": "user", "content": user_msg}],
             timeout=30.0,
@@ -683,16 +683,16 @@ def generate_drafts(
     if previous_notes and previous_notes.strip():
         prev_context = (
             "**Previous client/activity notes (use only for context in the 'detailed' draft):**\n"
-            + (previous_notes[:4000] + "..." if len(previous_notes) > 4000 else previous_notes)
+            + (previous_notes[:15000] + "..." if len(previous_notes) > 15000 else previous_notes)
             + "\n\n"
         )
-    user_msg = f"{prev_context}**Current note (user's draft) to rewrite:**\n{original_text[:6000]}"
+    user_msg = f"{prev_context}**Current note (user's draft) to rewrite:**\n{original_text[:20000]}"
     _start = time.monotonic()
     _error: str | None = None
     try:
         msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
-            max_tokens=4096,
+            max_tokens=8192,
             system=_system_block(_SYSTEM_DRAFTS),
             messages=[{"role": "user", "content": user_msg}],
             timeout=30.0,
@@ -743,7 +743,7 @@ def regenerate_single_draft(
     client = _get_client()
     prev_context = ""
     if previous_notes and previous_notes.strip():
-        clamped = previous_notes[:4000] + "..." if len(previous_notes) > 4000 else previous_notes
+        clamped = previous_notes[:15000] + "..." if len(previous_notes) > 15000 else previous_notes
         prev_context = (
             f"**Previous client/activity notes (use only for context in the 'detailed' draft):**\n"
             f"{clamped}\n\n"
@@ -756,12 +756,12 @@ def regenerate_single_draft(
         f'{{"{tone}": {{"text": "...", "confidence": number}}}}\n'
         "confidence: integer 0-100 based on how well the note lends itself to this style."
     )
-    user_msg = f"{prev_context}**Note to rewrite:**\n{original_text[:6000]}"
+    user_msg = f"{prev_context}**Note to rewrite:**\n{original_text[:20000]}"
     _start = time.monotonic()
     try:
         msg = _with_retry(lambda: client.messages.create(
             model=DEFAULT_MODEL,
-            max_tokens=1024,
+            max_tokens=2048,
             system=system_prompt,
             messages=[{"role": "user", "content": user_msg}],
             timeout=30.0,
