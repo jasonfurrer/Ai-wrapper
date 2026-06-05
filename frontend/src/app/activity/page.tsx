@@ -877,7 +877,8 @@ function ActivityPageContent(): React.ReactElement {
   );
   const [contactOptions, setContactOptions] = React.useState<Contact[]>([]);
   const [accountOptions, setAccountOptions] = React.useState<CompanySearchResult[]>([]);
-  const [contactsByCompany, setContactsByCompany] = React.useState<Contact[]>([]);
+  const [contactsByAccountMap, setContactsByAccountMap] = React.useState<Record<string, Contact[]>>({});
+  const requestedAccountIds = React.useRef<Set<string>>(new Set());
   const [activity, setActivity] = React.useState<Awaited<ReturnType<typeof getActivity>> | null>(null);
   const [activityLoading, setActivityLoading] = React.useState(true);
   const [processingError, setProcessingError] = React.useState<string | null>(null);
@@ -1050,13 +1051,18 @@ function ActivityPageContent(): React.ReactElement {
     return () => { cancelled = true; };
   }, [activityId]);
 
-  // When account is selected, load contacts for that company
+  // Fetch contacts for selected account when it wasn't pre-loaded from the suggestion list
   React.useEffect(() => {
-    if (!selectedAccount?.id) {
-      setContactsByCompany([]);
-      return;
-    }
-    getContactsByCompany(selectedAccount.id).then(setContactsByCompany).catch(() => setContactsByCompany([]));
+    if (!selectedAccount?.id) return;
+    if (requestedAccountIds.current.has(selectedAccount.id)) return;
+    requestedAccountIds.current.add(selectedAccount.id);
+    getContactsByCompany(selectedAccount.id)
+      .then((contacts) => {
+        setContactsByAccountMap((prev) => ({ ...prev, [selectedAccount.id]: contacts }));
+      })
+      .catch(() => {
+        setContactsByAccountMap((prev) => ({ ...prev, [selectedAccount.id]: [] }));
+      });
   }, [selectedAccount?.id]);
 
   // Fetch communication summary when viewing an existing task (backend generates if empty or notes changed, stores in Supabase)
@@ -1271,6 +1277,11 @@ function ActivityPageContent(): React.ReactElement {
     return () => { cancelled = true; };
   }, [debouncedContactQuery, selectedAccount?.id, selectedContact]);
 
+  const contactsByCompany = React.useMemo(
+    () => (selectedAccount?.id ? contactsByAccountMap[selectedAccount.id] ?? [] : []),
+    [selectedAccount?.id, contactsByAccountMap]
+  );
+
   const contactSuggestions = React.useMemo(() => {
     const q = contactSearch.trim().toLowerCase();
     if (selectedAccount?.id) {
@@ -1311,6 +1322,22 @@ function ActivityPageContent(): React.ReactElement {
   }, [debouncedAccountQuery, selectedAccount]);
 
   const accountSuggestions = React.useMemo(() => accountOptions.slice(0, 10), [accountOptions]);
+
+  // Pre-load contacts for all account suggestions as they arrive so contact dropdown is instant after account selection
+  React.useEffect(() => {
+    if (accountOptions.length === 0) return;
+    accountOptions.forEach((account) => {
+      if (requestedAccountIds.current.has(account.id)) return;
+      requestedAccountIds.current.add(account.id);
+      getContactsByCompany(account.id)
+        .then((contacts) => {
+          setContactsByAccountMap((prev) => ({ ...prev, [account.id]: contacts }));
+        })
+        .catch(() => {
+          setContactsByAccountMap((prev) => ({ ...prev, [account.id]: [] }));
+        });
+    });
+  }, [accountOptions]);
 
   const handleSendForProcessing = async () => {
     if (!noteContent.trim()) return;
@@ -1647,67 +1674,9 @@ function ActivityPageContent(): React.ReactElement {
         {/* 3. Contact & Account */}
         <Card className="border-[1.5px]">
           <CardHeader>
-            <CardTitle className="text-lg font-semibold">Contact & Account</CardTitle>
+            <CardTitle className="text-lg font-semibold">Account & Contact</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div ref={contactRef} className="relative">
-              <Label className="flex items-center gap-1.5">
-                <User className="h-4 w-4" />
-                Contact
-              </Label>
-              <div className="relative mt-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                <Input
-                  value={contactSearch}
-                  onChange={(e) => setContactSearch(e.target.value)}
-                  onFocus={() => setContactFocused(true)}
-                  placeholder="Search contacts..."
-                  className="pl-8"
-                />
-                {contactFocused && (contactSearchLoading || contactSuggestions.length > 0) && (
-                  <ul
-                    className="absolute z-10 mt-1 w-full rounded-md border border-border bg-popover py-1 shadow-soft-lg max-h-48 overflow-auto"
-                    role="listbox"
-                  >
-                    {contactSearchLoading && !selectedAccount?.id ? (
-                      <li className="px-3 py-2 text-sm text-muted-foreground flex items-center gap-2">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Searching...
-                      </li>
-                    ) : contactSuggestions.length === 0 ? (
-                      <li className="px-3 py-2 text-sm text-muted-foreground">
-                        {selectedAccount?.id
-                          ? 'No contacts for this account. Type to filter.'
-                          : 'No results. Type to search contacts.'}
-                      </li>
-                    ) : (
-                      contactSuggestions.map((contact, i) => (
-                        <li
-                          key={contact.id}
-                          role="option"
-                          aria-selected={selectedContact?.id === contact.id}
-                          className="cursor-pointer px-3 py-2 text-sm hover:bg-accent w-full text-left"
-                          onClick={() => {
-                            setContactSearch(contactDisplayName(contact));
-                            setSelectedContact(contact);
-                            if (contact.company_id && contact.company_name) {
-                              setSelectedAccount({ id: contact.company_id, name: contact.company_name, domain: undefined, city: undefined, state: undefined });
-                              setAccountSearch(contact.company_name);
-                            }
-                            setContactFocused(false);
-                          }}
-                        >
-                          <p className="font-medium">{contactDisplayName(contact)}</p>
-                          {contact.email ? (
-                            <p className="text-xs text-muted-foreground">{contact.email}</p>
-                          ) : null}
-                        </li>
-                      ))
-                    )}
-                  </ul>
-                )}
-              </div>
-            </div>
             <div ref={accountRef} className="relative">
               <Label className="flex items-center gap-1.5">
                 <Building2 className="h-4 w-4" />
@@ -1757,6 +1726,71 @@ function ActivityPageContent(): React.ReactElement {
                           {account.name ?? account.id}
                           {account.domain ? (
                             <span className="text-muted-foreground ml-1 text-xs">({account.domain})</span>
+                          ) : null}
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                )}
+              </div>
+            </div>
+            <div ref={contactRef} className="relative">
+              <Label className="flex items-center gap-1.5">
+                <User className="h-4 w-4" />
+                Contact
+              </Label>
+              <div className="relative mt-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  value={contactSearch}
+                  onChange={(e) => setContactSearch(e.target.value)}
+                  onFocus={() => setContactFocused(true)}
+                  placeholder="Search contacts..."
+                  className="pl-8"
+                />
+                {contactFocused && (
+                  contactSearchLoading ||
+                  contactSuggestions.length > 0 ||
+                  (selectedAccount?.id && !(selectedAccount.id in contactsByAccountMap))
+                ) && (
+                  <ul
+                    className="absolute z-10 mt-1 w-full rounded-md border border-border bg-popover py-1 shadow-soft-lg max-h-48 overflow-auto"
+                    role="listbox"
+                  >
+                    {(contactSearchLoading && !selectedAccount?.id) ||
+                    (selectedAccount?.id && !(selectedAccount.id in contactsByAccountMap)) ? (
+                      <li className="px-3 py-2 text-sm text-muted-foreground flex items-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        {selectedAccount?.id ? 'Loading contacts...' : 'Searching...'}
+                      </li>
+                    ) : contactSuggestions.length === 0 ? (
+                      <li className="px-3 py-2 text-sm text-muted-foreground">
+                        {selectedAccount?.id
+                          ? 'No contacts for this account. Type to filter.'
+                          : 'No results. Type to search contacts.'}
+                      </li>
+                    ) : (
+                      contactSuggestions.map((contact) => (
+                        <li
+                          key={contact.id}
+                          role="option"
+                          aria-selected={selectedContact?.id === contact.id}
+                          className="cursor-pointer px-3 py-2 text-sm hover:bg-accent w-full text-left"
+                          onClick={() => {
+                            setContactSearch(contactDisplayName(contact));
+                            setSelectedContact(contact);
+                            if (contact.company_id && contact.company_name) {
+                              setSelectedAccount({ id: contact.company_id, name: contact.company_name, domain: undefined, city: undefined, state: undefined });
+                              setAccountSearch(contact.company_name);
+                            }
+                            setContactFocused(false);
+                          }}
+                        >
+                          <p className="font-medium">{contactDisplayName(contact)}</p>
+                          {!selectedAccount?.id && contact.company_name ? (
+                            <p className="text-xs text-muted-foreground">{contact.company_name}</p>
+                          ) : contact.email ? (
+                            <p className="text-xs text-muted-foreground">{contact.email}</p>
                           ) : null}
                         </li>
                       ))
