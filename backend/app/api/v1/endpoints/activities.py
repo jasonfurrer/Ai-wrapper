@@ -3,6 +3,7 @@ Activities endpoints (HubSpot tasks with cache).
 List, get, create, update, delete, complete, force-sync, process-notes, submit.
 """
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -1186,46 +1187,55 @@ async def process_draft(
         contact_name = (body.contact_name or "").strip()
         full_notes = (previous_notes + "\n\n" + note_text).strip() if previous_notes else note_text
 
-        comm_result = generate_communication_summary(full_notes)
+        # Run all five LLM calls concurrently — each is independent of the others.
+        comm_result, recognised, recommended, metadata, drafts_map = await asyncio.gather(
+            asyncio.to_thread(generate_communication_summary, full_notes),
+            asyncio.to_thread(extract_recognised_date, note_text, previous_notes),
+            asyncio.to_thread(recommend_touch_date, note_text, previous_notes),
+            asyncio.to_thread(extract_metadata, note_text, previous_notes, contact_name),
+            asyncio.to_thread(generate_drafts, note_text, previous_notes),
+        )
+
         summary = comm_result.get("summary") or ""
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="generate_summary", log_status="error" if comm_result.get("_llm_error") else "success",
-            error_message=comm_result.get("_llm_error"),
-            response_summary=None if comm_result.get("_llm_error") else f"Generated summary ({len(summary)} chars)",
-            duration_ms=comm_result.get("_llm_duration_ms", 0),
-            metadata={"notes_len": len(full_notes), "skipped": bool(comm_result.get("_llm_skipped"))},
-        )
 
-        recognised = extract_recognised_date(note_text, previous_notes=previous_notes)
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="extract_date", log_status="error" if recognised.get("_llm_error") else "success",
-            error_message=recognised.get("_llm_error"),
-            response_summary=None if recognised.get("_llm_error") else (f"Extracted date: {recognised.get('date')}" if recognised.get("date") else "No date found"),
-            duration_ms=recognised.get("_llm_duration_ms", 0),
-        )
-
-        recommended = recommend_touch_date(note_text, previous_notes)
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="recommend_touch", log_status="error" if recommended.get("_llm_error") else "success",
-            error_message=recommended.get("_llm_error"),
-            response_summary=None if recommended.get("_llm_error") else f"Recommended date: {recommended.get('date')}",
-            duration_ms=recommended.get("_llm_duration_ms", 0),
-        )
-
-        metadata = extract_metadata(note_text, previous_notes, contact_name=contact_name)
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="extract_metadata", log_status="error" if metadata.get("_llm_error") else "success",
-            error_message=metadata.get("_llm_error"),
-            response_summary=None if metadata.get("_llm_error") else f"Subject: {metadata.get('subject', '')}",
-            duration_ms=metadata.get("_llm_duration_ms", 0),
-        )
-
-        drafts_map = generate_drafts(note_text, previous_notes)
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="generate_drafts", log_status="error" if drafts_map.get("_llm_error") else "success",
-            error_message=drafts_map.get("_llm_error"),
-            response_summary=None if drafts_map.get("_llm_error") else "Generated note drafts (formal, concise, detailed)",
-            duration_ms=drafts_map.get("_llm_duration_ms", 0),
+        # Write all operation logs concurrently.
+        await asyncio.gather(
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="generate_summary",
+                log_status="error" if comm_result.get("_llm_error") else "success",
+                error_message=comm_result.get("_llm_error"),
+                response_summary=None if comm_result.get("_llm_error") else f"Generated summary ({len(summary)} chars)",
+                duration_ms=comm_result.get("_llm_duration_ms", 0),
+                metadata={"notes_len": len(full_notes), "skipped": bool(comm_result.get("_llm_skipped"))},
+            ),
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="extract_date",
+                log_status="error" if recognised.get("_llm_error") else "success",
+                error_message=recognised.get("_llm_error"),
+                response_summary=None if recognised.get("_llm_error") else (f"Extracted date: {recognised.get('date')}" if recognised.get("date") else "No date found"),
+                duration_ms=recognised.get("_llm_duration_ms", 0),
+            ),
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="recommend_touch",
+                log_status="error" if recommended.get("_llm_error") else "success",
+                error_message=recommended.get("_llm_error"),
+                response_summary=None if recommended.get("_llm_error") else f"Recommended date: {recommended.get('date')}",
+                duration_ms=recommended.get("_llm_duration_ms", 0),
+            ),
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="extract_metadata",
+                log_status="error" if metadata.get("_llm_error") else "success",
+                error_message=metadata.get("_llm_error"),
+                response_summary=None if metadata.get("_llm_error") else f"Subject: {metadata.get('subject', '')}",
+                duration_ms=metadata.get("_llm_duration_ms", 0),
+            ),
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="generate_drafts",
+                log_status="error" if drafts_map.get("_llm_error") else "success",
+                error_message=drafts_map.get("_llm_error"),
+                response_summary=None if drafts_map.get("_llm_error") else "Generated note drafts (formal, concise, detailed)",
+                duration_ms=drafts_map.get("_llm_duration_ms", 0),
+            ),
         )
 
         drafts_out: dict[str, DraftOut] = {
@@ -1370,56 +1380,62 @@ async def process_notes(
         contact_name = (body.contact_name or "").strip()
         full_notes = (existing_body + "\n\n" + note_text).strip() if existing_body else note_text
 
-        comm_result = generate_communication_summary(full_notes)
+        # Run all five LLM calls concurrently — each is independent of the others.
+        # asyncio.to_thread() offloads the synchronous Anthropic SDK calls to the thread
+        # pool so the event loop is not blocked and all five run in parallel.
+        comm_result, recognised, recommended, metadata, drafts_map = await asyncio.gather(
+            asyncio.to_thread(generate_communication_summary, full_notes),
+            asyncio.to_thread(extract_recognised_date, note_text, existing_body),
+            asyncio.to_thread(recommend_touch_date, note_text, existing_body),
+            asyncio.to_thread(extract_metadata, note_text, existing_body, contact_name),
+            asyncio.to_thread(generate_drafts, note_text, existing_body),
+        )
+
         summary = comm_result.get("summary") or ""
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="generate_summary",
-            log_status="error" if comm_result.get("_llm_error") else "success",
-            entity_id=activity_id,
-            error_message=comm_result.get("_llm_error"),
-            response_summary=None if comm_result.get("_llm_error") else f"Generated summary ({len(summary)} chars)",
-            duration_ms=comm_result.get("_llm_duration_ms", 0),
-            metadata={"notes_len": len(full_notes), "skipped": bool(comm_result.get("_llm_skipped"))},
-        )
 
-        recognised = extract_recognised_date(note_text, previous_notes=existing_body)
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="extract_date",
-            log_status="error" if recognised.get("_llm_error") else "success",
-            entity_id=activity_id,
-            error_message=recognised.get("_llm_error"),
-            response_summary=None if recognised.get("_llm_error") else (f"Extracted date: {recognised.get('date')}" if recognised.get("date") else "No date found"),
-            duration_ms=recognised.get("_llm_duration_ms", 0),
-        )
-
-        recommended = recommend_touch_date(note_text, existing_body)
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="recommend_touch",
-            log_status="error" if recommended.get("_llm_error") else "success",
-            entity_id=activity_id,
-            error_message=recommended.get("_llm_error"),
-            response_summary=None if recommended.get("_llm_error") else f"Recommended date: {recommended.get('date')}",
-            duration_ms=recommended.get("_llm_duration_ms", 0),
-        )
-
-        metadata = extract_metadata(note_text, existing_body, contact_name=contact_name)
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="extract_metadata",
-            log_status="error" if metadata.get("_llm_error") else "success",
-            entity_id=activity_id,
-            error_message=metadata.get("_llm_error"),
-            response_summary=None if metadata.get("_llm_error") else f"Subject: {metadata.get('subject', '')}",
-            duration_ms=metadata.get("_llm_duration_ms", 0),
-        )
-
-        drafts_map = generate_drafts(note_text, existing_body)
-        await supabase.insert_operation_log(
-            user_id=user_id, entity_type="llm_call", operation="generate_drafts",
-            log_status="error" if drafts_map.get("_llm_error") else "success",
-            entity_id=activity_id,
-            error_message=drafts_map.get("_llm_error"),
-            response_summary=None if drafts_map.get("_llm_error") else "Generated note drafts (formal, concise, detailed)",
-            duration_ms=drafts_map.get("_llm_duration_ms", 0),
+        # Write all operation logs concurrently — results are available, order doesn't matter.
+        await asyncio.gather(
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="generate_summary",
+                log_status="error" if comm_result.get("_llm_error") else "success",
+                entity_id=activity_id,
+                error_message=comm_result.get("_llm_error"),
+                response_summary=None if comm_result.get("_llm_error") else f"Generated summary ({len(summary)} chars)",
+                duration_ms=comm_result.get("_llm_duration_ms", 0),
+                metadata={"notes_len": len(full_notes), "skipped": bool(comm_result.get("_llm_skipped"))},
+            ),
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="extract_date",
+                log_status="error" if recognised.get("_llm_error") else "success",
+                entity_id=activity_id,
+                error_message=recognised.get("_llm_error"),
+                response_summary=None if recognised.get("_llm_error") else (f"Extracted date: {recognised.get('date')}" if recognised.get("date") else "No date found"),
+                duration_ms=recognised.get("_llm_duration_ms", 0),
+            ),
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="recommend_touch",
+                log_status="error" if recommended.get("_llm_error") else "success",
+                entity_id=activity_id,
+                error_message=recommended.get("_llm_error"),
+                response_summary=None if recommended.get("_llm_error") else f"Recommended date: {recommended.get('date')}",
+                duration_ms=recommended.get("_llm_duration_ms", 0),
+            ),
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="extract_metadata",
+                log_status="error" if metadata.get("_llm_error") else "success",
+                entity_id=activity_id,
+                error_message=metadata.get("_llm_error"),
+                response_summary=None if metadata.get("_llm_error") else f"Subject: {metadata.get('subject', '')}",
+                duration_ms=metadata.get("_llm_duration_ms", 0),
+            ),
+            supabase.insert_operation_log(
+                user_id=user_id, entity_type="llm_call", operation="generate_drafts",
+                log_status="error" if drafts_map.get("_llm_error") else "success",
+                entity_id=activity_id,
+                error_message=drafts_map.get("_llm_error"),
+                response_summary=None if drafts_map.get("_llm_error") else "Generated note drafts (formal, concise, detailed)",
+                duration_ms=drafts_map.get("_llm_duration_ms", 0),
+            ),
         )
 
         drafts_out: dict[str, DraftOut] = {

@@ -69,6 +69,7 @@ import {
   searchContacts,
   searchCompanies,
   completeActivity,
+  ApiClientError,
 } from '@/lib/api';
 import type { CommunicationSummaryResponse } from '@/lib/api/types';
 import type { Contact } from '@/lib/api/types';
@@ -1357,7 +1358,17 @@ function ActivityPageContent(): React.ReactElement {
       });
       setDrafts(draftMap);
     } catch (e) {
-      setProcessingError(e instanceof Error ? e.message : 'Processing failed');
+      let msg = 'Processing failed. Please try again.';
+      if (e instanceof ApiClientError) {
+        if (typeof e.detail === 'string' && e.detail) {
+          msg = e.detail;
+        } else if (e.message && e.message !== 'Request failed') {
+          msg = e.message;
+        }
+      } else if (e instanceof Error && e.message) {
+        msg = e.message;
+      }
+      setProcessingError(msg);
       setProcessingStep('idle');
     }
   };
