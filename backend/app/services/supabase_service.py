@@ -746,6 +746,89 @@ class SupabaseService:
             return [], 0
 
 
+    # -------------------------------------------------------------------------
+    # Operation log (granular per-operation audit trail)
+    # -------------------------------------------------------------------------
+
+    async def insert_operation_log(
+        self,
+        user_id: str,
+        entity_type: str,
+        operation: str,
+        log_status: str,
+        entity_id: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        http_status_code: Optional[int] = None,
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
+        response_summary: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        duration_ms: int = 0,
+    ) -> None:
+        """Append an operation log entry. Never raises — logs errors internally."""
+        try:
+            row: Dict[str, Any] = {
+                "user_id": user_id,
+                "entity_type": entity_type,
+                "operation": operation,
+                "status": log_status,
+                "duration_ms": duration_ms,
+                "metadata": metadata or {},
+            }
+            if entity_id is not None:
+                row["entity_id"] = entity_id
+            if entity_name is not None:
+                row["entity_name"] = entity_name
+            if http_status_code is not None:
+                row["http_status_code"] = http_status_code
+            if error_code is not None:
+                row["error_code"] = error_code
+            if error_message is not None:
+                # Truncate very long error messages so they fit in the DB column
+                row["error_message"] = str(error_message)[:2000]
+            if response_summary is not None:
+                row["response_summary"] = str(response_summary)[:500]
+            self.client.table("operation_log").insert(row).execute()
+        except Exception as e:
+            logger.error("insert_operation_log error: %s", str(e))
+
+    async def list_operation_logs(
+        self,
+        user_id: str,
+        entity_type: Optional[str] = None,
+        status_filter: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[Dict[str, Any]], int]:
+        """List operation log entries for a user. Returns (rows, total_count)."""
+        try:
+            q = (
+                self.client.table("operation_log")
+                .select(
+                    "id, entity_type, operation, entity_id, entity_name, status, "
+                    "http_status_code, error_code, error_message, response_summary, "
+                    "metadata, duration_ms, created_at",
+                    count="exact",
+                )
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+            )
+            if entity_type:
+                q = q.eq("entity_type", entity_type)
+            if status_filter:
+                q = q.eq("status", status_filter)
+            response = q.range(offset, offset + limit - 1).execute()
+            total = response.count if response.count is not None else len(response.data or [])
+            rows = list(response.data or [])
+            for r in rows:
+                if r.get("id"):
+                    r["id"] = str(r["id"])
+            return rows, total
+        except Exception as e:
+            logger.error("list_operation_logs error: %s", str(e))
+            return [], 0
+
+
 def get_supabase_service() -> SupabaseService:
     """Dependency for FastAPI."""
     return SupabaseService()

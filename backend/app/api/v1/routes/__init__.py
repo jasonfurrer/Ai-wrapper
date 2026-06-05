@@ -8,7 +8,7 @@ request arrives without a trailing slash (e.g. after Next.js rewrite).
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import activities, companies, contacts, dashboard, gmail, hubspot, llm, sync_logs
+from app.api.v1.endpoints import activities, companies, contacts, dashboard, gmail, hubspot, llm, operation_logs, sync_logs
 
 api_router = APIRouter()
 
@@ -19,4 +19,5 @@ api_router.include_router(companies.router, prefix="")
 api_router.include_router(dashboard.router, prefix="")
 api_router.include_router(llm.router, prefix="")
 api_router.include_router(sync_logs.router, prefix="")
+api_router.include_router(operation_logs.router, prefix="")
 api_router.include_router(gmail.router, prefix="/gmail", tags=["Gmail"])

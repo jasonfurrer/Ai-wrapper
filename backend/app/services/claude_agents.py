@@ -6,6 +6,7 @@ Uses ANTHROPIC_API_KEY; all agents return structured data for the activity page.
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -92,7 +93,13 @@ def generate_communication_summary(full_notes: str) -> dict:
     - times_contacted: what can be recognised from the notes (e.g. "3 calls, 2 emails in Jan 2025")
     - relationship_status: relationship status inferred from the notes (e.g. "Warm", "Prospect", "Customer")
     Used for the Communication Summary section on the activity page; stored per task in Supabase.
+
+    Extra keys (not part of the public schema, used by callers for operation logging):
+    - _llm_error: str | None  — set when an exception was raised during the API call
+    - _llm_duration_ms: int   — wall-clock time of the function call in ms
+    - _llm_skipped: bool      — True when the API was not called (empty notes)
     """
+    _start = time.monotonic()
     logger.info("[generate_communication_summary] entry full_notes_len=%s", len(full_notes or ""))
     if not full_notes or not full_notes.strip():
         logger.info("[generate_communication_summary] empty notes, returning default")
@@ -100,6 +107,9 @@ def generate_communication_summary(full_notes: str) -> dict:
             "summary": "No communication history yet.",
             "times_contacted": "",
             "relationship_status": "",
+            "_llm_error": None,
+            "_llm_skipped": True,
+            "_llm_duration_ms": 0,
         }
     prompt = """You are an assistant that analyses client communication notes for a sales/relationship manager.
 
@@ -119,6 +129,7 @@ Notes:
     notes_to_send = (full_notes[:max_notes_len] + "...") if len(full_notes) > max_notes_len else full_notes
     content_len = len(prompt) + len(notes_to_send)
     logger.info("[generate_communication_summary] notes_to_send_len=%s total_content_len=%s", len(notes_to_send), content_len)
+    _error: str | None = None
     try:
         client = _get_client()
         logger.info("[generate_communication_summary] calling Claude API model=%s", DEFAULT_MODEL)
@@ -139,33 +150,42 @@ Notes:
                     "summary": (parsed.get("summary") or "").strip() or "No summary generated.",
                     "times_contacted": (parsed.get("times_contacted") or "").strip(),
                     "relationship_status": (parsed.get("relationship_status") or "").strip(),
+                    "_llm_error": None,
+                    "_llm_skipped": False,
+                    "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
                 }
             logger.warning("[generate_communication_summary] parsed result not a dict: type=%s", type(parsed).__name__)
         else:
             logger.warning("[generate_communication_summary] no text in response (blocks=%s)", len(content_blocks))
     except ValueError as e:
         logger.warning("[generate_communication_summary] config error: %s", e)
-        return {
-            "summary": "Unable to generate summary. Please try again.",
-            "times_contacted": "",
-            "relationship_status": "",
-        }
+        _error = f"Configuration error: {e}"
     except Exception as e:
         logger.exception(
             "[generate_communication_summary] exception type=%s msg=%s",
             type(e).__name__,
             str(e),
         )
+        _error = f"{type(e).__name__}: {e}"
+    _duration_ms = int((time.monotonic() - _start) * 1000)
+    if _error:
+        logger.info("[generate_communication_summary] returning error fallback after %sms", _duration_ms)
         return {
             "summary": "Unable to generate summary. Please try again.",
             "times_contacted": "",
             "relationship_status": "",
+            "_llm_error": _error,
+            "_llm_skipped": False,
+            "_llm_duration_ms": _duration_ms,
         }
     logger.info("[generate_communication_summary] falling through to no-summary (no text or parse failed)")
     return {
         "summary": "No summary generated.",
         "times_contacted": "",
         "relationship_status": "",
+        "_llm_error": None,
+        "_llm_skipped": False,
+        "_llm_duration_ms": _duration_ms,
     }
 
 
@@ -188,11 +208,15 @@ def extract_recognised_date(
       3. Falls back to {"date": None, "label": None, "confidence": 0} if still unresolvable.
 
     reference_date: override "today" for relative phrases; defaults to now (UTC).
+
+    Extra keys for operation logging: _llm_error, _llm_duration_ms, _llm_skipped.
     """
+    _start = time.monotonic()
     if not latest_note or not latest_note.strip():
-        return {"date": None, "label": None, "confidence": 0}
+        return {"date": None, "label": None, "confidence": 0, "_llm_error": None, "_llm_skipped": True, "_llm_duration_ms": 0}
     ref = reference_date or datetime.now(timezone.utc)
     client = _get_client()
+    _errors: list[str] = []
 
     # --- Pass 1: look for a date in the current note ---
     prompt_pass1 = f"""You are a precise assistant that extracts the DUE DATE for an upcoming task from activity or meeting notes.
@@ -232,13 +256,23 @@ Note:
                         "date": date_val,
                         "label": parsed.get("label") or date_val,
                         "confidence": min(100, max(0, int(parsed.get("confidence", 70)))),
+                        "_llm_error": None,
+                        "_llm_skipped": False,
+                        "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
                     }
     except Exception as e:
         logger.exception("Claude extract_recognised_date pass-1 error: %s", e)
+        _errors.append(f"pass1: {type(e).__name__}: {e}")
 
     # --- Pass 2: no date in current note – infer from historical meeting frequency ---
     if not previous_notes or not previous_notes.strip():
-        return {"date": None, "label": None, "confidence": 0}
+        _combined_error = "; ".join(_errors) if _errors else None
+        return {
+            "date": None, "label": None, "confidence": 0,
+            "_llm_error": _combined_error,
+            "_llm_skipped": False,
+            "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
+        }
 
     prompt_pass2 = f"""You are an assistant that infers a DUE DATE for a follow-up task from a client's historical meeting/contact notes.
 
@@ -274,11 +308,21 @@ Historical notes (oldest to newest):
                         "date": date_val2,
                         "label": parsed2.get("label") or date_val2,
                         "confidence": min(100, max(0, int(parsed2.get("confidence", 60)))),
+                        "_llm_error": "; ".join(_errors) if _errors else None,
+                        "_llm_skipped": False,
+                        "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
                     }
     except Exception as e:
         logger.exception("Claude extract_recognised_date pass-2 error: %s", e)
+        _errors.append(f"pass2: {type(e).__name__}: {e}")
 
-    return {"date": None, "label": None, "confidence": 0}
+    _combined_error = "; ".join(_errors) if _errors else None
+    return {
+        "date": None, "label": None, "confidence": 0,
+        "_llm_error": _combined_error,
+        "_llm_skipped": False,
+        "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +337,10 @@ def recommend_touch_date(
     """
     Based on relationship health and prior meeting patterns, suggest the next due date.
     Returns date (YYYY-MM-DD), label, and rationale.
+
+    Extra keys for operation logging: _llm_error, _llm_duration_ms, _llm_skipped.
     """
+    _start = time.monotonic()
     ref = reference_date or datetime.now(timezone.utc)
     client = _get_client()
     context = "Previous notes for this contact:\n" + (previous_notes or "None.") if previous_notes else "No previous notes."
@@ -311,6 +358,7 @@ Based on the content (commitments, "let's meet next week", typical follow-up cyc
 Respond with ONLY a JSON object:
 {{"date": "YYYY-MM-DD", "label": "short label", "rationale": "one sentence"}}
 """
+    _error: str | None = None
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
@@ -325,12 +373,23 @@ Respond with ONLY a JSON object:
                     "date": str(parsed["date"])[:10],
                     "label": parsed.get("label") or parsed["date"],
                     "rationale": parsed.get("rationale") or "Based on note context.",
+                    "_llm_error": None,
+                    "_llm_skipped": False,
+                    "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
                 }
     except Exception as e:
         logger.exception("Claude recommend_touch_date error: %s", e)
+        _error = f"{type(e).__name__}: {e}"
     # Fallback: 1 week from now
     one_week = (ref + timedelta(days=7)).strftime("%Y-%m-%d")
-    return {"date": one_week, "label": "1 week from now", "rationale": "Default follow-up in one week."}
+    return {
+        "date": one_week,
+        "label": "1 week from now",
+        "rationale": "Default follow-up in one week.",
+        "_llm_error": _error,
+        "_llm_skipped": False,
+        "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +405,10 @@ def extract_metadata(latest_note: str, previous_notes: str = "", contact_name: s
       1. A specific action explicitly stated in the note (e.g. "send him the files", "call the lawyer").
       2. If nothing specific is identified, fall back to "Check in w/ <contact_name>" (or
          "Check in" when no contact name is supplied).
+
+    Extra keys for operation logging: _llm_error, _llm_duration_ms, _llm_skipped.
     """
+    _start = time.monotonic()
     checkin_fallback = f"Check in w/ {contact_name.strip()}" if contact_name.strip() else "Check in"
     if not latest_note or not latest_note.strip():
         return {
@@ -355,6 +417,9 @@ def extract_metadata(latest_note: str, previous_notes: str = "", contact_name: s
             "urgency": "medium",
             "subject_confidence": 0,
             "questions_confidence": 0,
+            "_llm_error": None,
+            "_llm_skipped": True,
+            "_llm_duration_ms": 0,
         }
     client = _get_client()
     context = ""
@@ -384,6 +449,7 @@ def extract_metadata(latest_note: str, previous_notes: str = "", contact_name: s
 **Output format (JSON only):**
 {{"subject": "...", "questions_raised": "...", "urgency": "low"|"medium"|"high", "subject_confidence": number, "questions_confidence": number}}
 """
+    _error: str | None = None
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
@@ -404,15 +470,22 @@ def extract_metadata(latest_note: str, previous_notes: str = "", contact_name: s
                     "urgency": urgency,
                     "subject_confidence": min(100, max(0, int(parsed.get("subject_confidence", 70)))),
                     "questions_confidence": min(100, max(0, int(parsed.get("questions_confidence", 70)))),
+                    "_llm_error": None,
+                    "_llm_skipped": False,
+                    "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
                 }
     except Exception as e:
         logger.exception("Claude extract_metadata error: %s", e)
+        _error = f"{type(e).__name__}: {e}"
     return {
         "subject": checkin_fallback,
         "questions_raised": "",
         "urgency": "medium",
         "subject_confidence": 40,
         "questions_confidence": 50,
+        "_llm_error": _error,
+        "_llm_skipped": False,
+        "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
     }
 
 
@@ -458,6 +531,8 @@ def generate_drafts(
 **Output:** Return ONLY a JSON object with keys: formal, concise, detailed. Each value is an object with "text" (string) and "confidence" (integer 0-100). Do not include "original" in the JSON — the system will use the user's draft as original.
 {{"formal": {{"text": "...", "confidence": number}}, "concise": {{"text": "...", "confidence": number}}, "detailed": {{"text": "...", "confidence": number}}}}
 """
+    _start = time.monotonic()
+    _error: str | None = None
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
@@ -479,14 +554,19 @@ def generate_drafts(
                             }
                         else:
                             result[t] = {"text": original_text, "confidence": 70}
+                result["_llm_error"] = None
+                result["_llm_duration_ms"] = int((time.monotonic() - _start) * 1000)
                 return result
     except Exception as e:
         logger.exception("Claude generate_drafts error: %s", e)
+        _error = f"{type(e).__name__}: {e}"
     return {
         "original": {"text": original_text, "confidence": 100},
         "formal": {"text": original_text, "confidence": 70},
         "concise": {"text": original_text, "confidence": 70},
         "detailed": {"text": original_text, "confidence": 70},
+        "_llm_error": _error,
+        "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
     }
 
 
@@ -630,6 +710,8 @@ In all three tones, **content must still respect sections 1 and 2**: instruction
 {notes_to_send or "(none provided)"}
 """
 
+    _start = time.monotonic()
+    _error: str | None = None
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
@@ -656,16 +738,21 @@ In all three tones, **content must still respect sections 1 and 2**: instruction
                     "text": "(No draft generated for this tone.)",
                     "confidence": 0,
                 }
+        result["_llm_error"] = None
+        result["_llm_duration_ms"] = int((time.monotonic() - _start) * 1000)
         logger.info("[generate_email_drafts] success tones=%s suggested_subject=%s", list(result.keys()), suggested_subject[:50] if suggested_subject else "")
         return (result, suggested_subject)
     except Exception as e:
         logger.exception("[generate_email_drafts] error: %s", e)
+        _error = f"{type(e).__name__}: {e}"
         fallback = "Unable to generate drafts. Please try again."
         return (
             {
                 "warm": {"text": fallback, "confidence": 0},
                 "concise": {"text": fallback, "confidence": 0},
                 "formal": {"text": fallback, "confidence": 0},
+                "_llm_error": _error,
+                "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
             },
             "",
         )
@@ -902,6 +989,8 @@ Subject: """ + (subject or "") + """
 Body:
 """ + (body or "")[:14000]
 
+    _start = time.monotonic()
+    _error: str | None = None
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
@@ -936,11 +1025,14 @@ Body:
                     "city": s(parsed.get("city")),
                     "state_region": s(parsed.get("state_region")),
                     "company_owner": s(parsed.get("company_owner")),
+                    "_llm_error": None,
+                    "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
                 }
                 result = _confirm_company_from_contact_domain(result)
                 return result
     except Exception as e:
         logger.exception("Claude extract_contact_from_email error: %s", e)
+        _error = f"{type(e).__name__}: {e}"
     return {
         "first_name": "",
         "last_name": "",
@@ -952,6 +1044,8 @@ Body:
         "city": "",
         "state_region": "",
         "company_owner": "",
+        "_llm_error": _error,
+        "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
     }
 
 
@@ -961,18 +1055,20 @@ def generate_activity_note_from_email(
     subject: str,
     body: str,
     user_email: str | None = None,
-) -> str:
+) -> tuple[str, str | None, int]:
     """
     Use the full email (from, to, subject, body) as context and produce a brief
     activity note suitable for the activity Notes field, written from the user's
     perspective. The note states whether the user received or sent the email and
     what it mentions. user_email is the connected mailbox owner; when provided,
     direction (sent vs received) is determined so the note is phrased correctly.
-    Returns plain text only (no JSON).
+
+    Returns (note_text, llm_error, duration_ms).
     """
+    _start = time.monotonic()
     combined = (sender or "") + (to or "") + (subject or "") + (body or "")
     if not combined.strip():
-        return ""
+        return ("", None, 0)
     client = _get_client()
     body_truncated = (body or "")[:14000]
     if len(body or "") > 14000:
@@ -1039,7 +1135,8 @@ Body:
         )
         text = _get_first_text_from_message(msg)
         if text and text.strip():
-            return text.strip()
+            return (text.strip(), None, int((time.monotonic() - _start) * 1000))
     except Exception as e:
         logger.exception("Claude generate_activity_note_from_email error: %s", e)
-    return ""
+        return ("", f"{type(e).__name__}: {e}", int((time.monotonic() - _start) * 1000))
+    return ("", None, int((time.monotonic() - _start) * 1000))

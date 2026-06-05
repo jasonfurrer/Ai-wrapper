@@ -366,12 +366,20 @@ async def gmail_generate_activity_note(
     user_email = (tokens_row.get("email") or "").strip() or None
     if not user_email:
         user_email = await _ensure_user_email_in_tokens(supabase, user_id, tokens_row, service)
-    note = generate_activity_note_from_email(
+    note, llm_error, llm_duration_ms = generate_activity_note_from_email(
         sender=email_from,
         to=email_to,
         subject=subject,
         body=body_text,
         user_email=user_email,
+    )
+    await supabase.insert_operation_log(
+        user_id=user_id, entity_type="llm_call", operation="generate_activity_note",
+        log_status="error" if llm_error else "success",
+        error_message=llm_error,
+        response_summary=None if llm_error else f"Generated activity note from email: {subject[:80]}",
+        duration_ms=llm_duration_ms,
+        metadata={"message_id": message_id, "subject": subject[:200]},
     )
     return {"note": note or ""}
 
@@ -428,7 +436,17 @@ async def gmail_extract_contact(
         body=body_text,
         user_email=user_email,
     )
-    return extracted
+    llm_error = extracted.get("_llm_error")
+    llm_duration_ms = extracted.get("_llm_duration_ms", 0)
+    await supabase.insert_operation_log(
+        user_id=user_id, entity_type="llm_call", operation="extract_contact_from_email",
+        log_status="error" if llm_error else "success",
+        error_message=llm_error,
+        response_summary=None if llm_error else f"Extracted contact from email: {subject[:80]}",
+        duration_ms=llm_duration_ms,
+        metadata={"message_id": message_id, "subject": subject[:200]},
+    )
+    return {k: v for k, v in extracted.items() if not k.startswith("_llm_")}
 
 
 @router.post("/send")

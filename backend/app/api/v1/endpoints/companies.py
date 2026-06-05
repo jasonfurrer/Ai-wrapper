@@ -111,6 +111,11 @@ async def create_company(
         cid_str = str(cid)
         await supabase.upsert_company_cache(user_id, cid_str, company_data)
         props_out = company_data.get("properties") or {}
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="company", operation="create",
+            log_status="success", entity_id=cid_str, entity_name=body.name.strip(),
+            response_summary="Company created in HubSpot",
+        )
         return CompanyDetailResponse(
             id=cid_str,
             name=props_out.get(HS_NAME),
@@ -119,6 +124,12 @@ async def create_company(
             state=props_out.get(HS_STATE),
         )
     except HubSpotServiceError as e:
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="company", operation="create",
+            log_status="error", entity_name=body.name.strip(),
+            http_status_code=e.status_code, error_code=str(e.status_code),
+            error_message=e.message or "HubSpot error",
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=e.message or "HubSpot error",
@@ -127,6 +138,10 @@ async def create_company(
         raise
     except Exception as e:
         logger.exception("Create company error: %s", e)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="company", operation="create",
+            log_status="error", entity_name=body.name.strip(), error_message=str(e),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create company",

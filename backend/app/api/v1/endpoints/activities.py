@@ -46,7 +46,6 @@ from app.services.claude_agents import (
     generate_email_drafts,
     recommend_touch_date,
     regenerate_single_draft,
-    summarize_communication_history,
 )
 from app.services.gmail_service import get_gmail_user_display_name
 from app.services.hubspot_service import HubSpotService, HubSpotServiceError, get_hubspot_service
@@ -938,6 +937,20 @@ async def get_communication_summary(
             bool(result.get("times_contacted")),
             bool(result.get("relationship_status")),
         )
+        await supabase.insert_operation_log(
+            user_id=user_id,
+            entity_type="llm_call",
+            operation="generate_summary",
+            log_status="error" if result.get("_llm_error") else "success",
+            entity_id=activity_id,
+            error_message=result.get("_llm_error"),
+            response_summary=(
+                None if result.get("_llm_error")
+                else f"Generated summary ({len(result.get('summary', ''))} chars)"
+            ),
+            duration_ms=result.get("_llm_duration_ms", 0),
+            metadata={"notes_len": len(full_notes), "skipped": bool(result.get("_llm_skipped"))},
+        )
         await supabase.upsert_communication_summary(
             user_id=user_id,
             hubspot_task_id=activity_id,
@@ -976,6 +989,8 @@ async def create_activity(
     hubspot: HubSpotService = Depends(get_hubspot_service),
 ) -> ActivityResponse:
     """POST /api/v1/activities — create in HubSpot and cache."""
+    import time as _time
+    _start = _time.monotonic()
     try:
         props: dict[str, Any] = {}
         if body.subject is not None:
@@ -995,20 +1010,32 @@ async def create_activity(
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="HubSpot did not return task id")
         await supabase.upsert_task_cache(user_id, str(tid), task)
         a = _hubspot_task_to_activity(task)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="task", operation="create", log_status="success",
+            entity_id=str(tid), entity_name=(body.subject or "")[:200] or None,
+            response_summary=f"Created task (ID: {tid})",
+            duration_ms=int((_time.monotonic() - _start) * 1000),
+        )
         return _activity_dict_to_response(a)
     except HubSpotServiceError as e:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=e.message or "HubSpot error",
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="task", operation="create", log_status="error",
+            entity_name=(body.subject or "")[:200] or None,
+            http_status_code=e.status_code, error_message=e.message,
+            duration_ms=int((_time.monotonic() - _start) * 1000),
         )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=e.message or "HubSpot error")
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Create activity error: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create activity",
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="task", operation="create", log_status="error",
+            entity_name=(body.subject or "")[:200] or None,
+            error_message=str(e)[:500],
+            duration_ms=int((_time.monotonic() - _start) * 1000),
         )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create activity")
 
 
 @router.put(
@@ -1024,6 +1051,8 @@ async def update_activity(
     hubspot: HubSpotService = Depends(get_hubspot_service),
 ) -> ActivityResponse:
     """PUT /api/v1/activities/{activity_id} — update in HubSpot and cache."""
+    import time as _time
+    _start = _time.monotonic()
     try:
         props: dict[str, Any] = {}
         if body.subject is not None:
@@ -1038,28 +1067,37 @@ async def update_activity(
             props[HS_TYPE] = body.type
         payload = {"properties": props}
         if not payload.get("properties"):
-            # Fetch current and merge or return as-is
             task = hubspot.get_task(activity_id)
             await supabase.upsert_task_cache(user_id, activity_id, task)
             return _activity_dict_to_response(_hubspot_task_to_activity(task))
         task = hubspot.update_task(activity_id, payload)
         await supabase.upsert_task_cache(user_id, activity_id, task)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="task", operation="update", log_status="success",
+            entity_id=activity_id, entity_name=(body.subject or "")[:200] or None,
+            response_summary=f"Updated task (ID: {activity_id})",
+            duration_ms=int((_time.monotonic() - _start) * 1000),
+        )
         return _activity_dict_to_response(_hubspot_task_to_activity(task))
     except HubSpotServiceError as e:
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="task", operation="update", log_status="error",
+            entity_id=activity_id, http_status_code=e.status_code, error_message=e.message,
+            duration_ms=int((_time.monotonic() - _start) * 1000),
+        )
         if e.status_code == 404:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Activity not found")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=e.message or "HubSpot error",
-        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=e.message or "HubSpot error")
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Update activity error: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update activity",
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="task", operation="update", log_status="error",
+            entity_id=activity_id, error_message=str(e)[:500],
+            duration_ms=int((_time.monotonic() - _start) * 1000),
         )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update activity")
 
 
 @router.delete(
@@ -1074,16 +1112,25 @@ async def delete_activity(
     hubspot: HubSpotService = Depends(get_hubspot_service),
 ) -> MessageResponse:
     """DELETE /api/v1/activities/{activity_id} — delete in HubSpot and remove from cache."""
+    import time as _time
+    _start = _time.monotonic()
     try:
         hubspot.delete_task(activity_id)
     except HubSpotServiceError as e:
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="task", operation="delete", log_status="error",
+            entity_id=activity_id, http_status_code=e.status_code, error_message=e.message,
+            duration_ms=int((_time.monotonic() - _start) * 1000),
+        )
         if e.status_code == 404:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Activity not found")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=e.message or "HubSpot error",
-        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=e.message or "HubSpot error")
     await supabase.delete_task_cache(user_id, activity_id)
+    await supabase.insert_operation_log(
+        user_id=user_id, entity_type="task", operation="delete", log_status="success",
+        entity_id=activity_id, response_summary=f"Deleted task (ID: {activity_id})",
+        duration_ms=int((_time.monotonic() - _start) * 1000),
+    )
     return MessageResponse(message="Activity deleted successfully")
 
 
@@ -1130,24 +1177,61 @@ async def complete_activity(
 async def process_draft(
     body: ProcessDraftRequest,
     user_id: str = Depends(get_current_user_id),
+    supabase: SupabaseService = Depends(get_supabase_service),
 ) -> ProcessNotesResponse:
     """POST /api/v1/activities/process-draft — LLM processing without an existing activity (e.g. new activity)."""
     try:
         note_text = (body.note_text or "").strip()
         previous_notes = (body.previous_notes or "").strip()
         contact_name = (body.contact_name or "").strip()
+        full_notes = (previous_notes + "\n\n" + note_text).strip() if previous_notes else note_text
 
-        summary = summarize_communication_history(
-            (previous_notes + "\n\n" + note_text).strip() if previous_notes else note_text
+        comm_result = generate_communication_summary(full_notes)
+        summary = comm_result.get("summary") or ""
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="generate_summary", log_status="error" if comm_result.get("_llm_error") else "success",
+            error_message=comm_result.get("_llm_error"),
+            response_summary=None if comm_result.get("_llm_error") else f"Generated summary ({len(summary)} chars)",
+            duration_ms=comm_result.get("_llm_duration_ms", 0),
+            metadata={"notes_len": len(full_notes), "skipped": bool(comm_result.get("_llm_skipped"))},
         )
+
         recognised = extract_recognised_date(note_text, previous_notes=previous_notes)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="extract_date", log_status="error" if recognised.get("_llm_error") else "success",
+            error_message=recognised.get("_llm_error"),
+            response_summary=None if recognised.get("_llm_error") else (f"Extracted date: {recognised.get('date')}" if recognised.get("date") else "No date found"),
+            duration_ms=recognised.get("_llm_duration_ms", 0),
+        )
+
         recommended = recommend_touch_date(note_text, previous_notes)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="recommend_touch", log_status="error" if recommended.get("_llm_error") else "success",
+            error_message=recommended.get("_llm_error"),
+            response_summary=None if recommended.get("_llm_error") else f"Recommended date: {recommended.get('date')}",
+            duration_ms=recommended.get("_llm_duration_ms", 0),
+        )
+
         metadata = extract_metadata(note_text, previous_notes, contact_name=contact_name)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="extract_metadata", log_status="error" if metadata.get("_llm_error") else "success",
+            error_message=metadata.get("_llm_error"),
+            response_summary=None if metadata.get("_llm_error") else f"Subject: {metadata.get('subject', '')}",
+            duration_ms=metadata.get("_llm_duration_ms", 0),
+        )
+
         drafts_map = generate_drafts(note_text, previous_notes)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="generate_drafts", log_status="error" if drafts_map.get("_llm_error") else "success",
+            error_message=drafts_map.get("_llm_error"),
+            response_summary=None if drafts_map.get("_llm_error") else "Generated note drafts (formal, concise, detailed)",
+            duration_ms=drafts_map.get("_llm_duration_ms", 0),
+        )
 
         drafts_out: dict[str, DraftOut] = {
             k: DraftOut(text=v["text"], confidence=v["confidence"])
             for k, v in drafts_map.items()
+            if isinstance(v, dict) and "text" in v
         }
 
         return ProcessNotesResponse(
@@ -1224,9 +1308,18 @@ async def generate_smart_compose_drafts(
             last_touch_date=body.last_touch_date,
             sender_name=sender_name,
         )
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="generate_email_drafts",
+            log_status="error" if drafts_map.get("_llm_error") else "success",
+            error_message=drafts_map.get("_llm_error"),
+            response_summary=None if drafts_map.get("_llm_error") else "Generated email drafts (warm, concise, formal)",
+            duration_ms=drafts_map.get("_llm_duration_ms", 0),
+            metadata={"task_title": body.task_title or ""},
+        )
         drafts_out = {
             k: DraftOut(text=v["text"], confidence=v["confidence"])
             for k, v in drafts_map.items()
+            if isinstance(v, dict) and "text" in v
         }
         return GenerateEmailDraftsResponse(drafts=drafts_out, suggested_subject=suggested_subject or "")
     except ValueError as e:
@@ -1277,15 +1370,62 @@ async def process_notes(
         contact_name = (body.contact_name or "").strip()
         full_notes = (existing_body + "\n\n" + note_text).strip() if existing_body else note_text
 
-        summary = summarize_communication_history(full_notes)
+        comm_result = generate_communication_summary(full_notes)
+        summary = comm_result.get("summary") or ""
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="generate_summary",
+            log_status="error" if comm_result.get("_llm_error") else "success",
+            entity_id=activity_id,
+            error_message=comm_result.get("_llm_error"),
+            response_summary=None if comm_result.get("_llm_error") else f"Generated summary ({len(summary)} chars)",
+            duration_ms=comm_result.get("_llm_duration_ms", 0),
+            metadata={"notes_len": len(full_notes), "skipped": bool(comm_result.get("_llm_skipped"))},
+        )
+
         recognised = extract_recognised_date(note_text, previous_notes=existing_body)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="extract_date",
+            log_status="error" if recognised.get("_llm_error") else "success",
+            entity_id=activity_id,
+            error_message=recognised.get("_llm_error"),
+            response_summary=None if recognised.get("_llm_error") else (f"Extracted date: {recognised.get('date')}" if recognised.get("date") else "No date found"),
+            duration_ms=recognised.get("_llm_duration_ms", 0),
+        )
+
         recommended = recommend_touch_date(note_text, existing_body)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="recommend_touch",
+            log_status="error" if recommended.get("_llm_error") else "success",
+            entity_id=activity_id,
+            error_message=recommended.get("_llm_error"),
+            response_summary=None if recommended.get("_llm_error") else f"Recommended date: {recommended.get('date')}",
+            duration_ms=recommended.get("_llm_duration_ms", 0),
+        )
+
         metadata = extract_metadata(note_text, existing_body, contact_name=contact_name)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="extract_metadata",
+            log_status="error" if metadata.get("_llm_error") else "success",
+            entity_id=activity_id,
+            error_message=metadata.get("_llm_error"),
+            response_summary=None if metadata.get("_llm_error") else f"Subject: {metadata.get('subject', '')}",
+            duration_ms=metadata.get("_llm_duration_ms", 0),
+        )
+
         drafts_map = generate_drafts(note_text, existing_body)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="llm_call", operation="generate_drafts",
+            log_status="error" if drafts_map.get("_llm_error") else "success",
+            entity_id=activity_id,
+            error_message=drafts_map.get("_llm_error"),
+            response_summary=None if drafts_map.get("_llm_error") else "Generated note drafts (formal, concise, detailed)",
+            duration_ms=drafts_map.get("_llm_duration_ms", 0),
+        )
 
         drafts_out: dict[str, DraftOut] = {
             k: DraftOut(text=v["text"], confidence=v["confidence"])
             for k, v in drafts_map.items()
+            if isinstance(v, dict) and "text" in v
         }
 
         return ProcessNotesResponse(

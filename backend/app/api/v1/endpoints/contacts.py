@@ -408,6 +408,7 @@ async def create_contact(
         body.last_name,
         body.company_id or "",
     )
+    contact_display_name = " ".join(filter(None, [body.first_name, body.last_name])).strip() or body.email or ""
     try:
         props = _contact_create_to_hubspot_properties(body)
         payload = {"properties": props}
@@ -429,6 +430,11 @@ async def create_contact(
         logger.info("create_contact: upserting contact cache user_id=%s contact_id=%s", user_id, cid_str)
         await supabase.upsert_contact_cache(user_id, cid_str, contact_data)
         logger.info("create_contact: success returning contact id=%s", cid_str)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="contact", operation="create",
+            log_status="success", entity_id=cid_str, entity_name=contact_display_name,
+            response_summary=f"Contact created in HubSpot",
+        )
         return _hubspot_contact_to_contact(contact_data)
     except HubSpotServiceError as e:
         logger.warning(
@@ -436,6 +442,12 @@ async def create_contact(
             e.status_code,
             e.message,
             e.detail,
+        )
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="contact", operation="create",
+            log_status="error", entity_name=contact_display_name,
+            http_status_code=e.status_code, error_code=str(e.status_code),
+            error_message=e.message or "HubSpot error",
         )
         if e.status_code == 409:
             raise HTTPException(
@@ -450,6 +462,11 @@ async def create_contact(
         raise
     except Exception as e:
         logger.exception("create_contact: unexpected error: %s", e)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="contact", operation="create",
+            log_status="error", entity_name=contact_display_name,
+            error_message=str(e),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create contact",
@@ -478,8 +495,19 @@ async def update_contact(
         payload = {"properties": props}
         contact_data = hubspot.update_contact(contact_id, payload)
         await supabase.upsert_contact_cache(user_id, contact_id, contact_data)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="contact", operation="update",
+            log_status="success", entity_id=contact_id,
+            response_summary="Contact updated in HubSpot",
+        )
         return _hubspot_contact_to_contact(contact_data)
     except HubSpotServiceError as e:
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="contact", operation="update",
+            log_status="error", entity_id=contact_id,
+            http_status_code=e.status_code, error_code=str(e.status_code),
+            error_message=e.message or "HubSpot error",
+        )
         if e.status_code == 404:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
         raise HTTPException(
@@ -490,6 +518,10 @@ async def update_contact(
         raise
     except Exception as e:
         logger.exception("Update contact error: %s", e)
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="contact", operation="update",
+            log_status="error", entity_id=contact_id, error_message=str(e),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update contact",
@@ -511,6 +543,12 @@ async def delete_contact(
     try:
         hubspot.delete_contact(contact_id)
     except HubSpotServiceError as e:
+        await supabase.insert_operation_log(
+            user_id=user_id, entity_type="contact", operation="delete",
+            log_status="error", entity_id=contact_id,
+            http_status_code=e.status_code, error_code=str(e.status_code),
+            error_message=e.message or "HubSpot error",
+        )
         if e.status_code == 404:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
         raise HTTPException(
@@ -518,4 +556,9 @@ async def delete_contact(
             detail=e.message or "HubSpot error",
         )
     await supabase.delete_contact_cache(user_id, contact_id)
+    await supabase.insert_operation_log(
+        user_id=user_id, entity_type="contact", operation="delete",
+        log_status="success", entity_id=contact_id,
+        response_summary="Contact deleted from HubSpot",
+    )
     return MessageResponse(message="Contact deleted successfully")
