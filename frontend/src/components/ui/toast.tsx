@@ -28,15 +28,15 @@ const toastVariants = cva(
   {
     variants: {
       variant: {
-        default: 'border-border bg-background text-foreground',
+        default: 'border-border bg-card text-card-foreground',
         success:
-          'border-status-warm/30 bg-status-warm/10 text-foreground',
+          'border-status-warm/50 bg-card text-card-foreground',
         warning:
-          'border-status-cooling/30 bg-status-cooling/10 text-foreground',
+          'border-status-cooling/50 bg-card text-card-foreground',
         error:
-          'border-status-at-risk/30 bg-status-at-risk/10 text-foreground',
+          'border-status-at-risk/50 bg-card text-card-foreground',
         info:
-          'border-status-active/30 bg-status-active/10 text-foreground',
+          'border-status-active/50 bg-card text-card-foreground',
       },
     },
     defaultVariants: {

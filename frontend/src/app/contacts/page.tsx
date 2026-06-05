@@ -44,6 +44,7 @@ import {
   searchContacts,
   searchCompanies,
   createCompany,
+  ApiClientError,
   type Contact as ApiContact,
   type CompanySearchResult,
   type CompanyDetailResponse,
@@ -1061,18 +1062,20 @@ function ContactTabContent({
     await queryClient.invalidateQueries({ queryKey: [CONTACTS_QUERY_KEY] });
   }, [queryClient]);
 
+  const debouncedAccountSearch = useDebouncedValue(addContactForm.accountSearchDisplay, DEBOUNCE_MS);
+
   React.useEffect(() => {
-    if (!extractedDataForCompanyPicker) { setCompanyMatchResults([]); return; }
-    const companyName = (extractedDataForCompanyPicker.company_name || '').trim();
-    if (!companyName) { setCompanyMatchResults([]); return; }
+    if (!extractedDataForCompanyPicker || addContactForm.accountId) { setCompanyMatchResults([]); return; }
+    const searchTerm = debouncedAccountSearch.trim();
+    if (!searchTerm) { setCompanyMatchResults([]); return; }
     let cancelled = false;
     setCompanyMatchLoading(true);
-    searchCompanies(companyName)
+    searchCompanies(searchTerm)
       .then((list) => { if (!cancelled) setCompanyMatchResults(list); })
       .catch(() => { if (!cancelled) setCompanyMatchResults([]); })
       .finally(() => { if (!cancelled) setCompanyMatchLoading(false); });
     return () => { cancelled = true; };
-  }, [extractedDataForCompanyPicker]);
+  }, [extractedDataForCompanyPicker, debouncedAccountSearch, addContactForm.accountId]);
 
   const handleConfirmCompanyMatch = (c: CompanySearchResult) => {
     setAddContactForm((prev) => ({ ...prev, accountId: c.id, accountSearchDisplay: c.name ?? c.id }));
@@ -1085,7 +1088,8 @@ function ContactTabContent({
     if (!data) return;
     const params = new URLSearchParams();
     params.set('tab', 'account'); params.set('returnToContact', '1');
-    if (data.company_name) params.set('companyName', data.company_name);
+    const companyName = addContactForm.accountSearchDisplay.trim() || data.company_name;
+    if (companyName) params.set('companyName', companyName);
     if (data.company_domain) params.set('domain', data.company_domain);
     if (data.city) params.set('city', data.city);
     if (data.state_region) params.set('stateRegion', data.state_region);
@@ -1105,6 +1109,7 @@ function ContactTabContent({
     if (!em) next.email = 'Email is required';
     else if (!validateEmail(em)) next.email = 'Enter a valid email address';
     if (ph && !validatePhone(ph)) next.phone = 'Enter a valid phone number';
+    if (!addContactForm.accountId) next.account = 'Account is required. Search and select a company, or create one first.';
     setErrors(next);
     if (Object.keys(next).length > 0) return;
     setContactSubmitLoading(true);
@@ -1120,7 +1125,19 @@ function ContactTabContent({
       await refreshContactList();
       setAddContactForm(INITIAL_ADD_CONTACT_FORM);
     } catch (err) {
-      showToast('error', 'Failed to create contact', err instanceof Error ? err.message : 'Please try again.');
+      let description = 'Please try again.';
+      if (err instanceof ApiClientError) {
+        if (err.status === 409) {
+          description = 'A contact with this email already exists in HubSpot. Search for them in the panel on the right.';
+        } else if (typeof err.detail === 'string' && err.detail) {
+          description = err.detail;
+        } else if (err.message) {
+          description = err.message;
+        }
+      } else if (err instanceof Error && err.message) {
+        description = err.message;
+      }
+      showToast('error', 'Failed to create contact', description);
     } finally {
       setContactSubmitLoading(false);
     }
@@ -1204,11 +1221,11 @@ function ContactTabContent({
                   />
                 </div>
                 <div>
-                  <Label>Account</Label>
+                  <Label>Account *</Label>
                   <CompanySearchAutocomplete
                     value={addContactForm.accountSearchDisplay}
                     onChange={(v) => {
-                      setAddContactForm((p) => ({ ...p, accountSearchDisplay: v, ...(v ? {} : { accountId: '' }) }));
+                      setAddContactForm((p) => ({ ...p, accountSearchDisplay: v, accountId: '' }));
                     }}
                     onSelect={(c) => {
                       setAddContactForm((p) => ({
@@ -1218,8 +1235,11 @@ function ContactTabContent({
                       }));
                     }}
                     placeholder="Search companies..."
-                    className="mt-1"
+                    className={cn('mt-1', errors.account ? 'ring-1 ring-status-at-risk rounded-md' : '')}
                   />
+                  {errors.account && (
+                    <p className="text-xs text-status-at-risk mt-1">{errors.account}</p>
+                  )}
                   <Button
                     type="button"
                     variant="link"
@@ -1251,9 +1271,8 @@ function ContactTabContent({
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
                   <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={handleCreate}
+                    type="submit"
+                    variant="default"
                     disabled={contactSubmitLoading}
                   >
                     {contactSubmitLoading ? (
@@ -1268,7 +1287,7 @@ function ContactTabContent({
         </div>
 
       {/* Company match picker (after "Use extracted data" from Import column) */}
-      {extractedDataForCompanyPicker && (
+      {extractedDataForCompanyPicker && !addContactForm.accountId && (
         <Card className="border-status-warm/30">
           <CardHeader className="py-2.5">
             <CardTitle className="text-sm">Match account</CardTitle>

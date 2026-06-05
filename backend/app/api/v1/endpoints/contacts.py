@@ -437,6 +437,11 @@ async def create_contact(
             e.message,
             e.detail,
         )
+        if e.status_code == 409:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A contact with this email already exists in HubSpot. Search for them in the contacts panel.",
+            )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=e.message or "HubSpot error",
