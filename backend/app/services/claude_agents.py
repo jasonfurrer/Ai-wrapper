@@ -29,11 +29,217 @@ DEFAULT_MODEL = "claude-sonnet-4-20250514"
 DEFAULT_MAX_TOKENS = 2048
 
 
+# ---------------------------------------------------------------------------
+# Static system prompts — extracted for prompt caching (cache_control: ephemeral)
+# ---------------------------------------------------------------------------
+
+_SYSTEM_COMM_SUMMARY = """You are an assistant that analyses client communication notes for a sales/relationship manager.
+
+Given the full notes history below (often with date-prefixed entries), produce a structured analysis.
+
+Respond with ONLY a JSON object in this exact format, no other text:
+{
+  "summary": "2-4 short paragraphs: key topics, outcomes, commitments, next steps, and relationship context.",
+  "times_contacted": "What you can recognise from the notes about how often or when they were contacted (e.g. '3 calls in January, 2 emails in February', or 'Initial call 01/15, follow-up 01/22'). If unclear, say 'Not clearly stated' or similar.",
+  "relationship_status": "One short phrase for the relationship status as it appears from the notes (e.g. 'Prospect', 'Warm lead', 'Existing customer', 'Churned'). If unclear, use 'Unknown'."
+}"""
+
+_SYSTEM_DATE_PASS1 = """You are a precise assistant that extracts the DUE DATE for an upcoming task from activity or meeting notes.
+
+Your task: From the note below, identify exactly one date that represents when something is due, scheduled, or should happen next. Look for:
+- Explicit dates: "by March 15", "due 2025-03-20", "on Friday"
+- Relative dates: "next week", "in two weeks", "end of month", "next Wednesday"
+- Commitments: "follow up next Tuesday", "send proposal by end of week"
+
+Rules:
+- Return the date as YYYY-MM-DD. For "next Friday" use the upcoming Friday from the reference date provided.
+- "End of week" = Friday of the current or next week as appropriate; "end of month" = last day of the month.
+- label: A short human-readable label (e.g. "Next Wednesday", "By end of week").
+- confidence: 0-100. Use 85+ when the date is explicit; 60-84 when inferred from relative phrases; 0-59 when ambiguous.
+- If no clear due/scheduled date is mentioned or implied, set "date" to null, "label" to null, "confidence" to 0.
+
+Respond with ONLY a JSON object, no other text or markdown:
+{"date": "YYYY-MM-DD" or null, "label": "short label" or null, "confidence": number}"""
+
+_SYSTEM_DATE_PASS2 = """You are an assistant that infers a DUE DATE for a follow-up task from a client's historical meeting/contact notes.
+
+The latest note contains no explicit date. Use the historical notes below to detect a recurring contact pattern (e.g. every 2 weeks, monthly, weekly), then project the NEXT expected contact date from today.
+
+Rules:
+- Scan for date-stamped entries in the historical notes to detect cadence (e.g. 01/05, 01/19, 02/02 -> every 2 weeks).
+- If a clear pattern exists, project the next occurrence from today. confidence: 55-75 (inferred).
+- If the pattern is irregular or unclear, return date: null.
+- Do NOT guess — only return a date if the pattern is reasonably identifiable.
+- Return the date as YYYY-MM-DD with a short human-readable label (e.g. "In 2 weeks (pattern)", "Monthly check-in").
+
+Respond with ONLY a JSON object, no other text:
+{"date": "YYYY-MM-DD" or null, "label": "short label" or null, "confidence": number}"""
+
+_SYSTEM_TOUCH_DATE = """You are an assistant that suggests the next follow-up (touch) date for a client relationship.
+
+Based on the note content (commitments, e.g. "let's meet next week", typical follow-up cycles), suggest ONE recommended next touch date as YYYY-MM-DD. Provide a short label (e.g. "1 week from now") and a one-sentence rationale.
+
+Respond with ONLY a JSON object:
+{"date": "YYYY-MM-DD", "label": "short label", "rationale": "one sentence"}"""
+
+_SYSTEM_METADATA = """You are a CRM metadata extraction agent. From the latest activity/meeting note, extract structured fields for the upcoming task. Be consistent and accurate.
+
+Extract and respond with ONLY a JSON object (no markdown, no explanation):
+
+1. subject (string): The title of the NEXT / UPCOMING task.
+   - Look for an explicit, concrete action the user is going to take soon: e.g. "going to send him the files" -> "Send Files", "will talk to the lawyer" -> "Talk to Lawyer", "need to send the proposal by Friday" -> "Send Proposal".
+   - Use title case. Keep it short (2-6 words).
+   - IMPORTANT: Only use a specific task title when the note clearly states something the user must DO next. Do NOT invent a task if none is stated.
+   - If no specific next action is mentioned, use exactly the fallback label provided in the input below.
+
+2. questions_raised (string): Any open questions the contact raised or that remain unanswered. Empty string if none.
+
+3. urgency (string): Exactly one of "low", "medium", "high". Use "high" for time-sensitive or commitment-heavy notes; "medium" for normal follow-ups; "low" for informational or casual notes.
+
+4. subject_confidence (integer 0-100): 85+ when a specific task is clearly stated; 60-84 when inferred; set to 40 when using the fallback label.
+5. questions_confidence (integer 0-100): 85+ when explicit; 50-84 when inferred; below 50 when vague.
+
+Output format (JSON only):
+{"subject": "...", "questions_raised": "...", "urgency": "low"|"medium"|"high", "subject_confidence": number, "questions_confidence": number}"""
+
+_SYSTEM_DRAFTS = """You are a professional assistant that rewrites meeting/activity notes for a CRM. The user has provided their current draft note. Produce three alternative versions: formal, concise, and detailed.
+
+Requirements for each draft:
+
+1. formal: Rewrite the note in a formal, professional tone. Use complete sentences, avoid colloquialisms, and maintain a business-appropriate register. Keep the same factual content. Confidence 0-100 based on how well the note fits a formal style.
+
+2. concise: Make the note more concise. Preserve all key facts, outcomes, and commitments but use fewer words. Prefer short sentences and bullet-like clarity. Remove filler. Confidence 0-100.
+
+3. detailed: Produce a note that describes the latest interaction in detail. Wherever relevant and necessary, weave in brief context from the previous notes above (e.g. "Following up on the Q1 goals discussed previously..." or "As agreed in the last call..."). The note should still focus on the latest meeting/email but give enough prior context for someone reading only this note to understand the fuller picture. Use flowing prose, 2-4 paragraphs if appropriate. Confidence 0-100.
+
+Output: Return ONLY a JSON object with keys: formal, concise, detailed. Each value is an object with "text" (string) and "confidence" (integer 0-100). Do not include "original" in the JSON — the system will use the user's draft as original.
+{"formal": {"text": "...", "confidence": number}, "concise": {"text": "...", "confidence": number}, "detailed": {"text": "...", "confidence": number}}"""
+
+_SYSTEM_EMAIL_DRAFTS = """You are an expert sales and relationship email writer. Your task is to generate three ready-to-send email drafts for the same situation, each in a different tone: warm, concise, and formal. You must also output a single suggested_subject line for the email.
+
+---
+## 1. PRIORITY: Email draft instructions (highest authority)
+- The email draft instructions are the highest priority input. Treat them as the primary source of intent.
+- The user may refer to a specific section of the client notes (e.g. "use the latest note", "base this on the 2nd paragraph of the notes", "focus on what we agreed in the last call") or ask for a particular structure, tone, or content. Follow those instructions exactly. If instructions point to part of the client notes, use that part as the main evidence; do not drift to other sections unless the instructions allow it.
+- When instructions conflict with the task title or with general assumptions, instructions always win. Implement the instructions first; use task title and client notes to support that implementation, not to override it.
+- If instructions are empty, then use the task title and client notes as the sole source of objective and context.
+
+---
+## 2. NO ASSUMPTIONS — evidence from client notes only
+- Do not assume anything about the contact that is not explicitly stated or clearly implied in the client notes. If it is not in the notes, do not include it in the email body.
+- Never assume: the contact's schedule, availability, time zone, preferred meeting method (call vs video vs in-person), preferred time of day, or how they like to be contacted. Only reference these if they appear in the client notes.
+- Never assume that the user will meet the contact in person, go to lunch, or schedule an in-person meeting unless the instructions or client notes explicitly mention it (e.g. "suggest lunch", "meet in person", "schedule an in-person visit"). If neither instructions nor notes mention in-person or lunch, do not include offers or references to lunch or in-person meetings in the drafts.
+- Every factual claim about the contact, the relationship, or next steps in the email must be traceable to the client notes (or to the instructions). If you cannot point to a specific phrase or clear implication in the notes, omit that claim from the draft.
+- If the recipient's name or other details are unknown from the notes, use "[Contact Name]" or neutral wording in the greeting only; do not invent names or details.
+
+---
+## 3. Primary objective (task title + instructions)
+- The task title is the CRM purpose of the outreach (e.g. "Check in with Acme Corp", "Follow-up on contract"). The instructions define specifics: what to include, what to avoid, which part of the notes to use, tone, structure, or subject line.
+- Both are mandatory context. When instructions are present, they take precedence over the task title for what to say; the task title still informs why the email exists. When instructions are absent, the task title and client notes alone define the objective.
+
+---
+## 4. Subject line (suggested_subject) — order of precedence
+1. If the instructions explicitly specify a subject line (e.g. "subject: Follow-up on our call", "use subject: Q2 proposal attached"), use that as suggested_subject. Extract or paraphrase exactly what the user asked for; do not substitute the task title unless it matches.
+2. If the instructions do not specify a subject, derive a subject from the email's purpose, relationship (from client notes only), and main ask or topic. Keep it concise (under ~60 characters when practical), clear, and specific.
+3. Use the task title as the subject only when (a) it reads naturally as an email subject, and (b) the instructions did not specify a subject and the task title accurately reflects the email content. Do not default to the task title when a more specific, context-derived subject is possible.
+Output the chosen subject in the suggested_subject field of your JSON.
+
+---
+## 5. Context inputs
+The user message below provides:
+- Sender name: if given, use this exact name in the sign-off of every draft — do NOT use "[Your name]", "[Sender]", or any placeholder when a sender name is given. If not given, use a professional placeholder.
+- Last touch date: if given, use only to frame recency (e.g. "following up from our conversation on...") where relevant.
+- Client notes: use for facts, commitments, and prior discussion points only. Reference specific details (e.g. "as we discussed on the call", "the timeline you mentioned") only when they appear in the notes. Do not invent or assume facts.
+- Task title and email draft instructions.
+
+---
+## 6. Requirements for each draft (tone only; content still evidence-based)
+- Warm: Friendly, personable, relationship-oriented. Natural, conversational, professional. Appropriate greeting and sign-off. Use the sender name in the sign-off when provided (no placeholders).
+- Concise: Short and to the point. Lead with the objective; minimal preamble. Clear sentences; bullets only if they add clarity. No filler. Use the sender name in the sign-off when provided.
+- Formal: Professional, polished, suitable for senior or external stakeholders. Complete sentences, proper salutation and sign-off. Avoid colloquialisms. Use the sender name in the sign-off when provided.
+In all three tones, content must still respect sections 1 and 2: instructions first, and no assumptions—only what is supported by client notes (and instructions).
+
+---
+## 7. Output rules (strict)
+- Each draft must be a complete email body only (no subject line inside the body). Include a greeting and a sign-off in each draft.
+- Sign-off: When the sender name is provided, every draft must end with the actual sender name (e.g. "Best regards,\\nJohn Smith"). Never use "[Your name]", "[Sender]", or similar when the sender name is given. When not provided, you may use a placeholder.
+- All three drafts must fulfil the same objective (driven by instructions, then task title and notes); only the tone and length differ.
+- Do not make up names, dates, or facts. If the recipient's name is unknown, use "[Contact Name]" or "there" in the greeting only.
+- Output only valid JSON. No markdown code fences, no explanation. Use this exact structure (include suggested_subject at the top level):
+{"suggested_subject": "<one subject line string>", "warm": {"text": "<full email body>", "confidence": number}, "concise": {"text": "<full email body>", "confidence": number}, "formal": {"text": "<full email body>", "confidence": number}}
+- confidence: integer 0-100 per draft. 85+ when instructions and client notes clearly support the draft; 70-84 when partial support; 50-69 when thin but objective is clear; below 50 when inferring or when assumptions would be required (prefer omitting unsupported content and scoring lower rather than inventing)."""
+
+_SYSTEM_CONTACT_EXTRACT = """You are a CRM contact extraction agent. Your job is to extract structured contact and company information from a single email so it can be used to create or update a contact in HubSpot. Be thorough, consistent, and accurate.
+
+Rules:
+1. Extract the MAIN contact (one person) and their organization. The contact is the person we want to add to the CRM.
+2. Use only the From and To headers to determine the contact. Ignore CC and BCC.
+3. For every field, extract the most specific value you can find. Use empty string "" only when you truly cannot determine a value.
+4. Output ONLY valid JSON in the exact format below. Do not wrap the JSON in markdown code fences. No explanation, no other text. No trailing commas, no comments, no newlines inside string values; escape double quotes inside strings.
+5. When there are multiple recipients (To), the contact is the primary recipient: the first address in To that is not the current user. Use that party's display name and any signature or body content that refers to them (but for sent mail, do not use quoted/forwarded sections—see Email signatures below).
+6. If To contains only the user (e.g. self-sent or draft), leave contact fields empty unless one other party is clearly identifiable from the body.
+7. Do not extract the current user's name, email, company, or phone as the contact. Do not infer company_name or company_domain from the contact's personal email domain (e.g. @gmail.com, @yahoo.com)—leave company fields empty unless the body or signature states a company.
+
+Email signatures:
+Professional email signatures often appear at the end of the message (after sign-offs like "Best regards", "Cheers", "Thanks", "Kind regards", or "---") and contain detailed contact information. When the contact is the sender (received mail), treat the sender's signature as the primary source for: name, job title, company name, phone, city/state, and company domain. Common signature patterns include: "Name | Job Title | Company", block format (name on one line, title below, company below, phone/address), and lines with "M:" or "T:" for mobile/phone. Ignore legal disclaimers, confidentiality notices, and social/media links for extraction. When the contact is the recipient (sent mail), use the To header and the part of the body that directly addresses the recipient (e.g. salutation); do not use names, titles, or company from quoted replies or forwarded sections (e.g. "On ... wrote:", "---------- Forwarded message ---------"). If no clear recipient info beyond To, rely on To display name only.
+
+Field definitions:
+- first_name, last_name: The contact's given name and family name. Split full names into first and last: e.g. "John Smith" -> first_name "John", last_name "Smith". If only a single name component is known (e.g. just "John" with no last name), put it in first_name and leave last_name "". If the format is "Last, First", use First as first_name and Last as last_name. Never use the user's name.
+- email: The contact's email address only (e.g. "john@company.com"). If the user sent the email, contact email = first non-user address in To; if the user received it, contact email = From. Extract just the address from formats like "Name <email@domain.com>".
+- phone: Phone number clearly associated with the contact. Prefer E.164 when a country code is present (e.g. +1 555 123 4567); otherwise digits only. Signatures often include "M:", "T:", "Tel:", or "Mobile:". If multiple numbers appear for the contact, prefer one (e.g. mobile or the first in the signature). Use "" if none found or ambiguous.
+- job_title: Job title if stated (e.g. "VP of Sales"). Signatures frequently include title; prefer signature over body when both exist. Otherwise "".
+- company_name: The company or organization the contact works for. Look in the contact's signature first, then: "company X", "at X", "X Inc", "X Corp", "X Ltd", or the most prominent organization name in the body. Capitalize properly. Do not infer from personal email domains (gmail, yahoo, etc.); leave "" unless stated.
+- company_domain: The most likely official website domain for that company. Infer from company name (e.g. "Acme Corp" -> "acme.com"). Use lowercase, no "www". Leave "" if company_name is unknown or the contact uses a consumer email domain.
+- city, state_region: Location if mentioned (signature or body); otherwise "".
+- company_owner: Another person at the company (e.g. owner, decision-maker) if mentioned—not the contact themselves. Leave "" if not stated or if the only person mentioned is the contact.
+
+Output format (JSON only):
+{"first_name": "", "last_name": "", "email": "", "phone": "", "job_title": "", "company_name": "", "company_domain": "", "city": "", "state_region": "", "company_owner": ""}"""
+
+_SYSTEM_ACTIVITY_NOTE = """You are an assistant that turns emails into brief, consistent activity notes for a CRM. The note is a first-person-style log entry: it describes what the user (the activity owner) did or received. The user is never named in the note—they are the implied subject.
+
+Rules (follow strictly):
+
+1. Opening sentence — direction: Follow the direction instruction provided in the input below.
+
+2. Never mention the user's name. The note is the user's own activity log. When they sent the email, do NOT say "Email from [user name]" or "Email by [user name]". Say "Sent an email to [contact]." The contact is always the other party: if the user sent the email, contact = recipient (To); if the user received it, contact = sender (From).
+
+3. Never include any email address in the note. Refer to the contact by name only. Use the contact's name when it appears in: (a) the From/To header display name (e.g. "Lakshmi B <...>"), or (b) the email body (e.g. "Dear Lakshmi B"). Do not invent or guess a contact name. If no name is available, do NOT fall back to the email address—instead write "Sent an email." or "Received an email." and continue with "It mentions that..." and the details. The note must never contain an email address (no @ or domain).
+
+4. Content: After the opening, use "It mentions that...", "It stated that...", or "It noted that..." and in 1-3 sentences capture key points, requests, or outcomes. Neutral tone. If the email body explicitly mentions a date, time, or meeting time, include it in the note (e.g. "It mentions that the meeting is scheduled for Friday at 3pm.").
+
+5. Format: Flowing prose only. No bullets, no "Note:", no JSON, no markdown. Typically 2-4 sentences. Output ONLY the note text."""
+
+# Descriptions used by regenerate_single_draft to build a targeted single-tone prompt.
+_TONE_DESCRIPTIONS: dict[str, str] = {
+    "formal": (
+        "Rewrite the note in a formal, professional tone. Use complete sentences, avoid colloquialisms, "
+        "and maintain a business-appropriate register. Keep the same factual content."
+    ),
+    "concise": (
+        "Make the note more concise. Preserve all key facts, outcomes, and commitments but use fewer words. "
+        "Prefer short sentences and bullet-like clarity. Remove filler."
+    ),
+    "detailed": (
+        "Produce a note that describes the latest interaction in detail. Wherever relevant and necessary, "
+        "weave in brief context from the previous notes (e.g. 'Following up on the Q1 goals discussed "
+        "previously...' or 'As agreed in the last call...'). The note should still focus on the latest "
+        "meeting/email but give enough prior context for someone reading only this note to understand the "
+        "fuller picture. Use flowing prose, 2-4 paragraphs if appropriate."
+    ),
+}
+
+
 def _get_client() -> Anthropic:
     settings = get_settings()
     if not settings.anthropic_api_key:
         raise ValueError("ANTHROPIC_API_KEY is not set")
     return Anthropic(api_key=settings.anthropic_api_key)
+
+
+def _system_block(text: str) -> list[dict]:
+    """Wrap a static system prompt in a cacheable content block."""
+    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
 
 def _get_first_text_from_message(msg) -> str | None:
@@ -111,23 +317,11 @@ def generate_communication_summary(full_notes: str) -> dict:
             "_llm_skipped": True,
             "_llm_duration_ms": 0,
         }
-    prompt = """You are an assistant that analyses client communication notes for a sales/relationship manager.
-
-Given the full notes history below (often with date-prefixed entries), produce a structured analysis.
-
-Respond with ONLY a JSON object in this exact format, no other text:
-{
-  "summary": "2-4 short paragraphs: key topics, outcomes, commitments, next steps, and relationship context.",
-  "times_contacted": "What you can recognise from the notes about how often or when they were contacted (e.g. '3 calls in January, 2 emails in February', or 'Initial call 01/15, follow-up 01/22'). If unclear, say 'Not clearly stated' or similar.",
-  "relationship_status": "One short phrase for the relationship status as it appears from the notes (e.g. 'Prospect', 'Warm lead', 'Existing customer', 'Churned'). If unclear, use 'Unknown'."
-}
-
-Notes:
-"""
     # Truncate notes to avoid token/size limits and API errors
     max_notes_len = 50_000
     notes_to_send = (full_notes[:max_notes_len] + "...") if len(full_notes) > max_notes_len else full_notes
-    content_len = len(prompt) + len(notes_to_send)
+    user_msg = f"Notes:\n{notes_to_send}"
+    content_len = len(_SYSTEM_COMM_SUMMARY) + len(user_msg)
     logger.info("[generate_communication_summary] notes_to_send_len=%s total_content_len=%s", len(notes_to_send), content_len)
     _error: str | None = None
     try:
@@ -136,7 +330,8 @@ Notes:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=DEFAULT_MAX_TOKENS,
-            messages=[{"role": "user", "content": prompt + notes_to_send}],
+            system=_system_block(_SYSTEM_COMM_SUMMARY),
+            messages=[{"role": "user", "content": user_msg}],
         )
         content_blocks = getattr(msg, "content", None) or []
         logger.info("[generate_communication_summary] response received content_blocks=%s", len(content_blocks))
@@ -204,7 +399,7 @@ def extract_recognised_date(
     Priority:
       1. Explicit or relative date in the current note (e.g. "by Friday", "next week").
       2. If none found, infer a sensible date from the meeting-frequency pattern visible in
-         previous_notes (e.g. "meets every 2 weeks" → next occurrence).
+         previous_notes (e.g. "meets every 2 weeks" -> next occurrence).
       3. Falls back to {"date": None, "label": None, "confidence": 0} if still unresolvable.
 
     reference_date: override "today" for relative phrases; defaults to now (UTC).
@@ -219,32 +414,16 @@ def extract_recognised_date(
     _errors: list[str] = []
 
     # --- Pass 1: look for a date in the current note ---
-    prompt_pass1 = f"""You are a precise assistant that extracts the DUE DATE for an upcoming task from activity or meeting notes.
-
-**Reference (today):** {ref.strftime("%Y-%m-%d")} ({ref.strftime("%A, %B %d, %Y")}).
-
-**Your task:** From the note below, identify exactly one date that represents when something is due, scheduled, or should happen next. Look for:
-- Explicit dates: "by March 15", "due 2025-03-20", "on Friday"
-- Relative dates: "next week", "in two weeks", "end of month", "next Wednesday"
-- Commitments: "follow up next Tuesday", "send proposal by end of week"
-
-**Rules:**
-- Return the date as YYYY-MM-DD. For "next Friday" use the upcoming Friday from the reference date.
-- "End of week" = Friday of the current or next week as appropriate; "end of month" = last day of the month.
-- label: A short human-readable label (e.g. "Next Wednesday", "By end of week").
-- confidence: 0-100. Use 85+ when the date is explicit; 60-84 when inferred from relative phrases; 0-59 when ambiguous.
-- If no clear due/scheduled date is mentioned or implied, set "date" to null, "label" to null, "confidence" to 0.
-
-Respond with ONLY a JSON object, no other text or markdown:
-{{"date": "YYYY-MM-DD" or null, "label": "short label" or null, "confidence": number}}
-
-Note:
-{latest_note}"""
+    user_msg_pass1 = (
+        f"Reference (today): {ref.strftime('%Y-%m-%d')} ({ref.strftime('%A, %B %d, %Y')}).\n\n"
+        f"Note:\n{latest_note}"
+    )
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt_pass1}],
+            system=_system_block(_SYSTEM_DATE_PASS1),
+            messages=[{"role": "user", "content": user_msg_pass1}],
         )
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
@@ -274,29 +453,16 @@ Note:
             "_llm_duration_ms": int((time.monotonic() - _start) * 1000),
         }
 
-    prompt_pass2 = f"""You are an assistant that infers a DUE DATE for a follow-up task from a client's historical meeting/contact notes.
-
-**Reference (today):** {ref.strftime("%Y-%m-%d")} ({ref.strftime("%A, %B %d, %Y")}).
-
-The latest note contains no explicit date. Use the historical notes below to detect a recurring contact pattern (e.g. every 2 weeks, monthly, weekly), then project the NEXT expected contact date from today.
-
-**Rules:**
-- Scan for date-stamped entries in the historical notes to detect cadence (e.g. 01/05, 01/19, 02/02 → every 2 weeks).
-- If a clear pattern exists, project the next occurrence from today. confidence: 55-75 (inferred).
-- If the pattern is irregular or unclear, return date: null.
-- Do NOT guess — only return a date if the pattern is reasonably identifiable.
-- Return the date as YYYY-MM-DD with a short human-readable label (e.g. "In 2 weeks (pattern)", "Monthly check-in").
-
-Respond with ONLY a JSON object, no other text:
-{{"date": "YYYY-MM-DD" or null, "label": "short label" or null, "confidence": number}}
-
-Historical notes (oldest to newest):
-{previous_notes[:6000]}"""
+    user_msg_pass2 = (
+        f"Reference (today): {ref.strftime('%Y-%m-%d')} ({ref.strftime('%A, %B %d, %Y')}).\n\n"
+        f"Historical notes (oldest to newest):\n{previous_notes[:6000]}"
+    )
     try:
         msg2 = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt_pass2}],
+            system=_system_block(_SYSTEM_DATE_PASS2),
+            messages=[{"role": "user", "content": user_msg_pass2}],
         )
         block2 = msg2.content[0] if msg2.content else None
         if block2 and getattr(block2, "text", None):
@@ -343,27 +509,21 @@ def recommend_touch_date(
     _start = time.monotonic()
     ref = reference_date or datetime.now(timezone.utc)
     client = _get_client()
-    context = "Previous notes for this contact:\n" + (previous_notes or "None.") if previous_notes else "No previous notes."
-    prompt = f"""You are an assistant that suggests the next follow-up (touch) date for a client relationship.
-
-Reference date: {ref.strftime("%Y-%m-%d")} ({ref.strftime("%A")}).
-
-{context}
-
-Latest note:
-{latest_note or "No latest note."}
-
-Based on the content (commitments, "let's meet next week", typical follow-up cycles), suggest ONE recommended next touch date as YYYY-MM-DD. Provide a short label (e.g. "1 week from now") and a one-sentence rationale.
-
-Respond with ONLY a JSON object:
-{{"date": "YYYY-MM-DD", "label": "short label", "rationale": "one sentence"}}
-"""
+    # Clamp previous_notes to avoid unbounded token usage
+    prev_notes_clamped = (previous_notes[:6000] + "...") if len(previous_notes) > 6000 else previous_notes
+    context = "Previous notes for this contact:\n" + prev_notes_clamped if previous_notes else "No previous notes."
+    user_msg = (
+        f"Reference date: {ref.strftime('%Y-%m-%d')} ({ref.strftime('%A')}).\n\n"
+        f"{context}\n\n"
+        f"Latest note:\n{latest_note or 'No latest note.'}"
+    )
     _error: str | None = None
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
+            system=_system_block(_SYSTEM_TOUCH_DATE),
+            messages=[{"role": "user", "content": user_msg}],
         )
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
@@ -426,35 +586,18 @@ def extract_metadata(latest_note: str, previous_notes: str = "", contact_name: s
     if previous_notes and previous_notes.strip():
         context = "**Previous notes (context only):**\n" + (previous_notes[:3000] + "..." if len(previous_notes) > 3000 else previous_notes) + "\n\n"
     fallback_label = f'"{checkin_fallback}"'
-    prompt = f"""You are a CRM metadata extraction agent. From the latest activity/meeting note, extract structured fields for the upcoming task. Be consistent and accurate.
-
-{context}**Latest note:**
-{latest_note[:8000]}
-
-**Extract and respond with ONLY a JSON object (no markdown, no explanation):**
-
-1. **subject** (string): The title of the NEXT / UPCOMING task.
-   - Look for an explicit, concrete action the user is going to take soon: e.g. "going to send him the files" → "Send Files", "will talk to the lawyer" → "Talk to Lawyer", "need to send the proposal by Friday" → "Send Proposal".
-   - Use title case. Keep it short (2-6 words).
-   - **IMPORTANT**: Only use a specific task title when the note clearly states something the user must DO next. Do NOT invent a task if none is stated.
-   - If no specific next action is mentioned, set subject to exactly {fallback_label}.
-
-2. **questions_raised** (string): Any open questions the contact raised or that remain unanswered. Empty string if none.
-
-3. **urgency** (string): Exactly one of "low", "medium", "high". Use "high" for time-sensitive or commitment-heavy notes; "medium" for normal follow-ups; "low" for informational or casual notes.
-
-4. **subject_confidence** (integer 0-100): 85+ when a specific task is clearly stated; 60-84 when inferred; set to 40 when falling back to {fallback_label}.
-5. **questions_confidence** (integer 0-100): 85+ when explicit; 50-84 when inferred; below 50 when vague.
-
-**Output format (JSON only):**
-{{"subject": "...", "questions_raised": "...", "urgency": "low"|"medium"|"high", "subject_confidence": number, "questions_confidence": number}}
-"""
+    user_msg = (
+        f"Fallback label (use this exact text when no specific next action is stated): {fallback_label}\n\n"
+        f"{context}"
+        f"**Latest note:**\n{latest_note[:8000]}"
+    )
     _error: str | None = None
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+            system=_system_block(_SYSTEM_METADATA),
+            messages=[{"role": "user", "content": user_msg}],
         )
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
@@ -515,29 +658,15 @@ def generate_drafts(
             + (previous_notes[:4000] + "..." if len(previous_notes) > 4000 else previous_notes)
             + "\n\n"
         )
-    prompt = f"""You are a professional assistant that rewrites meeting/activity notes for a CRM. The user has provided their current draft note. Produce three alternative versions: formal, concise, and detailed.
-
-{prev_context}**Current note (user's draft) to rewrite:**
-{original_text[:6000]}
-
-**Requirements for each draft:**
-
-1. **formal**: Rewrite the note in a formal, professional tone. Use complete sentences, avoid colloquialisms, and maintain a business-appropriate register. Keep the same factual content. Confidence 0-100 based on how well the note fits a formal style.
-
-2. **concise**: Make the note more concise. Preserve all key facts, outcomes, and commitments but use fewer words. Prefer short sentences and bullet-like clarity. Remove filler. Confidence 0-100.
-
-3. **detailed**: Produce a note that describes the latest interaction in detail. Wherever relevant and necessary, weave in brief context from the previous notes above (e.g. "Following up on the Q1 goals discussed previously..." or "As agreed in the last call..."). The note should still focus on the latest meeting/email but give enough prior context for someone reading only this note to understand the fuller picture. Use flowing prose, 2-4 paragraphs if appropriate. Confidence 0-100.
-
-**Output:** Return ONLY a JSON object with keys: formal, concise, detailed. Each value is an object with "text" (string) and "confidence" (integer 0-100). Do not include "original" in the JSON — the system will use the user's draft as original.
-{{"formal": {{"text": "...", "confidence": number}}, "concise": {{"text": "...", "confidence": number}}, "detailed": {{"text": "...", "confidence": number}}}}
-"""
+    user_msg = f"{prev_context}**Current note (user's draft) to rewrite:**\n{original_text[:6000]}"
     _start = time.monotonic()
     _error: str | None = None
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
+            system=_system_block(_SYSTEM_DRAFTS),
+            messages=[{"role": "user", "content": user_msg}],
         )
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
@@ -575,9 +704,51 @@ def regenerate_single_draft(
     previous_notes: str,
     tone: str,
 ) -> dict:
-    """Regenerate only one draft tone (e.g. after user clicks Regenerate for "formal")."""
-    drafts = generate_drafts(current_note, previous_notes, tones=[tone])
-    return drafts.get(tone, {"text": (current_note or "").strip(), "confidence": 70})
+    """
+    Regenerate only one draft tone with a targeted single-draft API call.
+    More efficient than generate_drafts() when only one tone is needed.
+    """
+    if tone not in _TONE_DESCRIPTIONS:
+        return {"text": (current_note or "").strip(), "confidence": 70}
+    original_text = (current_note or "").strip() or "No notes provided."
+    client = _get_client()
+    prev_context = ""
+    if previous_notes and previous_notes.strip():
+        clamped = previous_notes[:4000] + "..." if len(previous_notes) > 4000 else previous_notes
+        prev_context = (
+            f"**Previous client/activity notes (use only for context in the 'detailed' draft):**\n"
+            f"{clamped}\n\n"
+        )
+    system_prompt = (
+        f"You are a professional assistant that rewrites meeting/activity notes for a CRM. "
+        f"Produce a single {tone} version of the note provided.\n\n"
+        f"Instruction: {_TONE_DESCRIPTIONS[tone]}\n\n"
+        f"Return ONLY a JSON object with one key:\n"
+        f'{{"{tone}": {{"text": "...", "confidence": number}}}}\n'
+        "confidence: integer 0-100 based on how well the note lends itself to this style."
+    )
+    user_msg = f"{prev_context}**Note to rewrite:**\n{original_text[:6000]}"
+    _start = time.monotonic()
+    try:
+        msg = client.messages.create(
+            model=DEFAULT_MODEL,
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        block = msg.content[0] if msg.content else None
+        if block and getattr(block, "text", None):
+            parsed = _parse_json_block(block.text)
+            if isinstance(parsed, dict):
+                val = parsed.get(tone)
+                if isinstance(val, dict) and "text" in val:
+                    return {
+                        "text": str(val["text"]).strip() or original_text,
+                        "confidence": min(100, max(0, int(val.get("confidence", 75)))),
+                    }
+    except Exception as e:
+        logger.exception("Claude regenerate_single_draft error: %s", e)
+    return {"text": original_text, "confidence": 70}
 
 
 # ---------------------------------------------------------------------------
@@ -628,87 +799,21 @@ def generate_email_drafts(
     max_notes_len = 24_000
     notes_to_send = (notes[:max_notes_len] + "\n\n[Notes truncated for length.]") if len(notes) > max_notes_len else notes
 
-    last_touch_block = ""
-    if last_touch:
-        last_touch_block = (
-            "\n**Last touch date (last contact with this person/account):** "
-            f"{last_touch}\nUse this to inform tone (e.g. 'following up after our conversation on...') where relevant."
-        )
+    # Build simple one-line context inputs for the user message
+    sender_line = (
+        f"Sender name: {sender}\n"
+        if sender
+        else "Sender name: Not provided — use a placeholder in the sign-off.\n"
+    )
+    last_touch_line = f"Last touch date: {last_touch}\n" if last_touch else ""
 
-    sender_block = ""
-    if sender:
-        sender_block = (
-            f"\n**Sender name (use this exact name in the sign-off of every draft):** {sender}\n"
-            "Do NOT use '[Your name]', '[Sender]', or any placeholder. End each draft with the actual sign-off using this name (e.g. 'Best regards,\n{sender}' or 'Thanks,\n{sender}')."
-        )
-    else:
-        sender_block = (
-            "\n**Sender name:** Not provided. Use a professional sign-off followed by a generic placeholder such as '[Your name]' or '[Sender]' only in this case."
-        )
-
-    prompt = f"""You are an expert sales and relationship email writer. Your task is to generate three ready-to-send email drafts for the same situation, each in a different tone: **warm**, **concise**, and **formal**. You must also output a single **suggested_subject** line for the email.
-
----
-## 1. PRIORITY: Email draft instructions (highest authority)
-- The **email draft instructions** are the **highest priority** input. Treat them as the primary source of intent.
-- The user may refer to a **specific section** of the client notes (e.g. "use the latest note", "base this on the 2nd paragraph of the notes", "focus on what we agreed in the last call") or ask for a particular structure, tone, or content. **Follow those instructions exactly.** If instructions point to part of the client notes, use that part as the main evidence; do not drift to other sections unless the instructions allow it.
-- When instructions conflict with the task title or with general assumptions, **instructions always win.** Implement the instructions first; use task title and client notes to support that implementation, not to override it.
-- If instructions are empty, then use the task title and client notes as the sole source of objective and context.
-
----
-## 2. NO ASSUMPTIONS — evidence from client notes only
-- **Do not assume anything about the contact** that is not explicitly stated or clearly implied in the **client notes**. If it is not in the notes, do not include it in the email body.
-- **Never assume:** the contact's schedule, availability, time zone, preferred meeting method (call vs video vs in-person), preferred time of day, or how they like to be contacted. Only reference these if they appear in the client notes.
-- **Never assume:** that the user will meet the contact in person, go to lunch, or schedule an in-person meeting **unless** the instructions or client notes explicitly mention it (e.g. "suggest lunch", "meet in person", "schedule an in-person visit"). If neither instructions nor notes mention in-person or lunch, do not include offers or references to lunch or in-person meetings in the drafts.
-- Every factual claim about the contact, the relationship, or next steps in the email must be **traceable to the client notes** (or to the instructions). If you cannot point to a specific phrase or clear implication in the notes, omit that claim from the draft.
-- If the recipient's name or other details are unknown from the notes, use "[Contact Name]" or neutral wording in the greeting only; do not invent names or details.
-
----
-## 3. Primary objective (task title + instructions)
-- The **task title** is the CRM purpose of the outreach (e.g. "Check in with Acme Corp", "Follow-up on contract"). The **instructions** define specifics: what to include, what to avoid, which part of the notes to use, tone, structure, or subject line.
-- Both are mandatory context. When instructions are present, they take precedence over the task title for *what* to say; the task title still informs *why* the email exists. When instructions are absent, the task title and client notes alone define the objective.
-
----
-## 4. Subject line (suggested_subject) — order of precedence
-1. **If the instructions explicitly specify a subject line** (e.g. "subject: Follow-up on our call", "use subject: Q2 proposal attached"), use that as suggested_subject. Extract or paraphrase exactly what the user asked for; do not substitute the task title unless it matches.
-2. **If the instructions do not specify a subject**, derive a subject from the email's purpose, relationship (from client notes only), and main ask or topic. Keep it concise (under ~60 characters when practical), clear, and specific.
-3. **Use the task title as the subject only when** (a) it reads naturally as an email subject, and (b) the instructions did not specify a subject and the task title accurately reflects the email content. Do not default to the task title when a more specific, context-derived subject is possible.
-Output the chosen subject in the **suggested_subject** field of your JSON.
-
----
-## 5. Context you must use
-- **Client notes:** Use them for facts, commitments, and prior discussion points only. Reference specific details (e.g. "as we discussed on the call", "the timeline you mentioned") **only when they appear in the notes**. Do not invent or assume facts.
-- **Last touch date** (if provided): Use it only to frame recency (e.g. "following up from our conversation on...") where relevant.
-{sender_block}
-{last_touch_block}
-
----
-## 6. Requirements for each draft (tone only; content still evidence-based)
-- **Warm:** Friendly, personable, relationship-oriented. Natural, conversational, professional. Appropriate greeting and sign-off. Use the sender name in the sign-off when provided (no placeholders).
-- **Concise:** Short and to the point. Lead with the objective; minimal preamble. Clear sentences; bullets only if they add clarity. No filler. Use the sender name in the sign-off when provided.
-- **Formal:** Professional, polished, suitable for senior or external stakeholders. Complete sentences, proper salutation and sign-off. Avoid colloquialisms. Use the sender name in the sign-off when provided.
-In all three tones, **content must still respect sections 1 and 2**: instructions first, and no assumptions—only what is supported by client notes (and instructions).
-
----
-## 7. Output rules (strict)
-- Each draft must be a **complete email body** only (no subject line inside the body). Include a greeting and a sign-off in each draft.
-- **Sign-off:** When the sender name is provided, every draft must end with the actual sender name (e.g. "Best regards,\nJohn Smith"). Never use "[Your name]", "[Sender]", or similar when the sender name is given. When not provided, you may use a placeholder.
-- All three drafts must fulfil the **same objective** (driven by instructions, then task title and notes); only the tone and length differ.
-- Do not make up names, dates, or facts. If the recipient's name is unknown, use "[Contact Name]" or "there" in the greeting only.
-- Output **only** valid JSON. No markdown code fences, no explanation. Use this exact structure (include suggested_subject at the top level):
-{{"suggested_subject": "<one subject line string>", "warm": {{"text": "<full email body>", "confidence": number}}, "concise": {{"text": "<full email body>", "confidence": number}}, "formal": {{"text": "<full email body>", "confidence": number}}}}
-- **confidence:** integer 0–100 per draft. 85+ when instructions and client notes clearly support the draft; 70–84 when partial support; 50–69 when thin but objective is clear; below 50 when inferring or when assumptions would be required (prefer omitting unsupported content and scoring lower rather than inventing).
-
----
-**Task title (CRM purpose of the outreach; use for objective and only for subject when it fits per rules above):**
-{title or "(none provided)"}
-
-**Email draft instructions (user-specific guidance; check here first for an explicit subject):**
-{instructions or "(none provided)"}
----
-**Client notes (use for accuracy and personalisation):**
-{notes_to_send or "(none provided)"}
-"""
+    user_msg = (
+        f"{sender_line}"
+        f"{last_touch_line}"
+        f"\n**Task title (CRM purpose of the outreach):**\n{title or '(none provided)'}\n\n"
+        f"**Email draft instructions (user-specific guidance; check here first for an explicit subject):**\n{instructions or '(none provided)'}\n\n"
+        f"---\n**Client notes (use for accuracy and personalisation):**\n{notes_to_send or '(none provided)'}"
+    )
 
     _start = time.monotonic()
     _error: str | None = None
@@ -716,7 +821,8 @@ In all three tones, **content must still respect sections 1 and 2**: instruction
         msg = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
+            system=_system_block(_SYSTEM_EMAIL_DRAFTS),
+            messages=[{"role": "user", "content": user_msg}],
         )
         text = _get_first_text_from_message(msg)
         if not text:
@@ -873,8 +979,8 @@ def _extract_email_address(header: str) -> str:
 def _contact_email_from_direction(sender: str, to: str, user_email: str) -> str:
     """
     Determine contact email from message direction when we know the current user's email.
-    - Inbox email (user received): contact = sender → return From address.
-    - Sent email (user sent): contact = receiver → return first To address (that is not the user).
+    - Inbox email (user received): contact = sender -> return From address.
+    - Sent email (user sent): contact = receiver -> return first To address (that is not the user).
     """
     u = user_email.strip().lower()
     from_addr = _extract_email_address(sender or "")
@@ -890,13 +996,13 @@ def _contact_email_from_direction(sender: str, to: str, user_email: str) -> str:
             addr = _extract_email_address(part)
             if addr:
                 to_addresses.append(addr)
-    # User sent (From == user) → contact is recipient → use first To address
+    # User sent (From == user) -> contact is recipient -> use first To address
     if from_addr.lower() == u:
         for addr in to_addresses:
             if addr.lower() != u:
                 return addr
         return to_addresses[0] if to_addresses else ""
-    # User received (user is in To) → contact is sender → use From address
+    # User received (user is in To) -> contact is sender -> use From address
     if any(addr.lower() == u for addr in to_addresses) or (to_addresses and to_addresses[0].lower() == u):
         return from_addr
     # To might be a single string without comma; try parsing whole To as one
@@ -942,52 +1048,25 @@ def extract_contact_from_email(
     user_email_instruction = ""
     if user_email and user_email.strip():
         user_email_instruction = (
-            f"\n**Current user's email (the person using this tool):** {user_email.strip()}\n"
+            f"**Current user's email (the person using this tool):** {user_email.strip()}\n"
             "The CONTACT to extract is always the *other* party, not the user. Never extract the user's name, email, company, or phone as the contact.\n"
             "- **If the email was SENT by the user** (From matches the user's email): the contact is the RECIPIENT. Use the To field for contact email (extract the address only, e.g. from 'Name <a@b.com>' use 'a@b.com'). When there are multiple recipients in To, the contact is the **primary (first) recipient**—use the first address in To that is not the user. For name and other fields, use the To header display name and the part of the body that directly addresses the recipient (e.g. salutation). Do **not** use names, titles, or company from quoted replies or forwarded sections (e.g. \"On ... wrote:\", \"---------- Forwarded message ---------\").\n"
-            "- **If the email was RECEIVED by the user** (To contains the user's email): the contact is the SENDER. Use the From field for contact email (extract the address only). For name and other fields, use the From header display name and the **sender's email signature** (see Email signatures below) as the primary source; then body/salutation if needed.\n"
+            "- **If the email was RECEIVED by the user** (To contains the user's email): the contact is the SENDER. Use the From field for contact email (extract the address only). For name and other fields, use the From header display name and the **sender's email signature** (see Email signatures in the system instructions) as the primary source; then body/salutation if needed.\n"
         )
     else:
         user_email_instruction = (
-            "\n**Note:** Current user's email was not provided. Treat the SENDER (From) as the contact and extract their details from the From header and the email body/signature. Do not assume the recipient is the contact unless context clearly indicates otherwise.\n"
+            "**Note:** Current user's email was not provided. Treat the SENDER (From) as the contact and extract their details from the From header and the email body/signature. Do not assume the recipient is the contact unless context clearly indicates otherwise.\n"
         )
 
-    prompt = """You are a CRM contact extraction agent. Your job is to extract structured contact and company information from a single email so it can be used to create or update a contact in HubSpot. Be thorough, consistent, and accurate.
-
-**Rules**
-1. Extract the MAIN contact (one person) and their organization. The contact is the person we want to add to the CRM.
-2. Use only the From and To headers to determine the contact. Ignore CC and BCC.
-3. For every field, extract the most specific value you can find. Use empty string "" only when you truly cannot determine a value.
-4. Output ONLY valid JSON in the exact format below. Do not wrap the JSON in markdown code fences. No explanation, no other text. No trailing commas, no comments, no newlines inside string values; escape double quotes inside strings.
-5. When there are multiple recipients (To), the contact is the **primary recipient**: the first address in To that is not the user. Use that party's display name and any signature or body content that refers to them (but for sent mail, do not use quoted/forwarded sections—see Email signatures).
-6. If To contains only the user (e.g. self-sent or draft), leave contact fields empty unless one other party is clearly identifiable from the body.
-7. **Do not** extract the current user's name, email, company, or phone as the contact. Do not infer company_name or company_domain from the contact's personal email domain (e.g. @gmail.com, @yahoo.com)—leave company fields empty unless the body or signature states a company.
-""" + user_email_instruction + """
-**Email signatures**
-Professional email signatures often appear at the end of the message (after sign-offs like "Best regards", "Cheers", "Thanks", "Kind regards", or "---") and contain detailed contact information. When the contact is the **sender** (received mail), treat the sender's signature as the **primary source** for: name, job title, company name, phone, city/state, and company domain. Common signature patterns include: "Name | Job Title | Company", block format (name on one line, title below, company below, phone/address), and lines with "M:" or "T:" for mobile/phone. Ignore legal disclaimers, confidentiality notices, and social/media links for extraction. When the contact is the **recipient** (sent mail), use the To header and the part of the body that directly addresses the recipient (e.g. salutation); do **not** use names, titles, or company from quoted replies or forwarded sections (e.g. "On ... wrote:", "---------- Forwarded message ---------"). If no clear recipient info beyond To, rely on To display name only.
-
-**Field definitions**
-- **first_name, last_name:** The contact's given name and family name. For received mail the contact is the sender—use From display name and the sender's signature/body. For sent mail the contact is the recipient—use To display name and body that refers to them (not quoted/forwarded). Never use the user's name. If only one name is given (e.g. "John" or "John Smith"), put it in first_name and leave last_name "". If the format is "Last, First", use First as first_name and Last as last_name.
-- **email:** The contact's email address only (e.g. "john@company.com"). If the user sent the email, contact email = first non-user address in To; if the user received it, contact email = From. Extract just the address from formats like "Name <email@domain.com>".
-- **phone:** Phone number clearly associated with the contact. Prefer E.164 when a country code is present (e.g. +1 555 123 4567); otherwise digits only. Signatures often include "M:", "T:", "Tel:", or "Mobile:". If multiple numbers appear for the contact, prefer one (e.g. mobile or the first in the signature). Use "" if none found or ambiguous.
-- **job_title:** Job title if stated (e.g. "VP of Sales"). Signatures frequently include title; prefer signature over body when both exist. Otherwise "".
-- **company_name:** The company or organization the contact works for. Look in the contact's signature first, then: "company X", "at X", "X Inc", "X Corp", "X Ltd", or the most prominent organization name in the body. Capitalize properly. Do not infer from personal email domains (gmail, yahoo, etc.); leave "" unless stated.
-- **company_domain:** The most likely official website domain for that company. Infer from company name (e.g. "Acme Corp" → "acme.com"). Use lowercase, no "www". Leave "" if company_name is unknown or the contact uses a consumer email domain.
-- **city, state_region:** Location if mentioned (signature or body); otherwise "".
-- **company_owner:** Another person at the company (e.g. owner, decision-maker) if mentioned—**not** the contact themselves. Leave "" if not stated or if the only person mentioned is the contact.
-
-**Output format (JSON only):**
-{"first_name": "", "last_name": "", "email": "", "phone": "", "job_title": "", "company_name": "", "company_domain": "", "city": "", "state_region": "", "company_owner": ""}
-
----
-**Email to analyse (body may be truncated; extract only from the content provided):**
-
-From: """ + (sender or "") + """
-To: """ + (to or "") + """
-Subject: """ + (subject or "") + """
-
-Body:
-""" + (body or "")[:14000]
+    user_msg = (
+        f"{user_email_instruction}\n"
+        "---\n"
+        "**Email to analyse (body may be truncated; extract only from the content provided):**\n\n"
+        f"From: {sender or ''}\n"
+        f"To: {to or ''}\n"
+        f"Subject: {subject or ''}\n\n"
+        f"Body:\n{(body or '')[:14000]}"
+    )
 
     _start = time.monotonic()
     _error: str | None = None
@@ -996,7 +1075,8 @@ Body:
             model=DEFAULT_MODEL,
             max_tokens=1024,
             temperature=0,
-            messages=[{"role": "user", "content": prompt}],
+            system=_system_block(_SYSTEM_CONTACT_EXTRACT),
+            messages=[{"role": "user", "content": user_msg}],
         )
         block = msg.content[0] if msg.content else None
         if block and getattr(block, "text", None):
@@ -1008,8 +1088,8 @@ Body:
                 if email_val and "<" in email_val and ">" in email_val:
                     email_val = _extract_email_address(email_val)
                 # Backend rule: when we know user_email, contact email is determined by direction.
-                # Inbox (user received) → contact = sender → use From.
-                # Sent (user sent) → contact = receiver → use To.
+                # Inbox (user received) -> contact = sender -> use From.
+                # Sent (user sent) -> contact = receiver -> use To.
                 if user_email and user_email.strip():
                     derived = _contact_email_from_direction(sender or "", to or "", user_email)
                     if derived:
@@ -1102,36 +1182,22 @@ def generate_activity_note_from_email(
             "If they received it: start with 'Received an email from [contact]' (contact = sender's name). Use only names, never email addresses; never mention the activity owner's name."
         )
 
-    prompt = """You are an assistant that turns emails into brief, consistent activity notes for a CRM. The note is a first-person-style log entry: it describes what **the user** (the activity owner) did or received. The user is never named in the note—they are the implied subject.
-
-**Rules (follow strictly):**
-
-1. **Opening sentence — direction:**
-""" + direction_instruction + """
-
-2. **Never mention the user's name.** The note is the user's own activity log. When they sent the email, do NOT say "Email from [user name]" or "Email by [user name]". Say "Sent an email to [contact]." The contact is always the *other* party: if the user sent the email, contact = recipient (To); if the user received it, contact = sender (From).
-
-3. **Never include any email address in the note.** Refer to the contact by **name only**. Use the contact's name when it appears in: (a) the From/To header display name (e.g. "Lakshmi B <...>"), or (b) the email body (e.g. "Dear Lakshmi B"). Do not invent or guess a contact name. If no name is available, do NOT fall back to the email address—instead write "Sent an email." or "Received an email." and continue with "It mentions that..." and the details. The note must never contain an email address (no @ or domain).
-
-4. **Content:** After the opening, use "It mentions that...", "It stated that...", or "It noted that..." and in 1–3 sentences capture key points, requests, or outcomes. Past tense, neutral tone. If the email body explicitly mentions a date, time, or meeting time, include it in the note (e.g. "It mentions that the meeting is scheduled for Friday at 3pm.").
-
-5. **Format:** Flowing prose only. No bullets, no "Note:", no JSON, no markdown. Typically 2–4 sentences. Output ONLY the note text.
-
----
-Email to turn into an activity note (body may be truncated; base the note only on the content provided):
-
-From: """ + (sender or "") + """
-To: """ + (to or "") + """
-Subject: """ + (subject or "") + """
-
-Body:
-""" + body_truncated
+    user_msg = (
+        f"Direction instruction:\n{direction_instruction}\n\n"
+        "---\n"
+        "Email to turn into an activity note (body may be truncated; base the note only on the content provided):\n\n"
+        f"From: {sender or ''}\n"
+        f"To: {to or ''}\n"
+        f"Subject: {subject or ''}\n\n"
+        f"Body:\n{body_truncated}"
+    )
 
     try:
         msg = client.messages.create(
             model=DEFAULT_MODEL,
             max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+            system=_system_block(_SYSTEM_ACTIVITY_NOTE),
+            messages=[{"role": "user", "content": user_msg}],
         )
         text = _get_first_text_from_message(msg)
         if text and text.strip():
