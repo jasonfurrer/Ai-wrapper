@@ -66,7 +66,6 @@ interface IntegrationTile {
   icon: React.ElementType;
   brandBg: string;
   status: 'connected' | 'disconnected';
-  lastSync: string;
 }
 
 const INTEGRATIONS: IntegrationTile[] = [
@@ -76,7 +75,6 @@ const INTEGRATIONS: IntegrationTile[] = [
     icon: Building2,
     brandBg: 'bg-orange-500/15',
     status: 'connected',
-    lastSync: '2024-01-15T14:32:00Z',
   },
   {
     id: 'email',
@@ -84,7 +82,6 @@ const INTEGRATIONS: IntegrationTile[] = [
     icon: Mail,
     brandBg: 'bg-blue-500/15',
     status: 'connected',
-    lastSync: '2024-01-15T14:30:00Z',
   },
 ];
 
@@ -520,6 +517,8 @@ function IntegrationsPageInner(): React.ReactElement {
   const [syncLogError, setSyncLogError] = React.useState<string | null>(null);
   const [selectedLogEntry, setSelectedLogEntry] = React.useState<ApiSyncLogEntry | null>(null);
   const [hubspotSyncLoading, setHubspotSyncLoading] = React.useState(false);
+  const [hubspotLastSync, setHubspotLastSync] = React.useState<string | null>(null);
+  const [hubspotLastSyncLoading, setHubspotLastSyncLoading] = React.useState(true);
   const SYNC_PAGE_SIZE = 10;
 
   const [toast, setToast] = React.useState<{
@@ -641,6 +640,22 @@ function IntegrationsPageInner(): React.ReactElement {
     fetchSyncLog();
   }, [fetchSyncLog]);
 
+  const fetchHubspotLastSync = React.useCallback(async () => {
+    setHubspotLastSyncLoading(true);
+    try {
+      const data = await getSyncLogs({ source: 'hubspot', page: 1, page_size: 1 });
+      setHubspotLastSync(data.entries[0]?.finished_at ?? null);
+    } catch {
+      setHubspotLastSync(null);
+    } finally {
+      setHubspotLastSyncLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    fetchHubspotLastSync();
+  }, [fetchHubspotLastSync]);
+
   const handleSyncNowHubSpot = async () => {
     setHubspotSyncLoading(true);
     try {
@@ -656,10 +671,10 @@ function IntegrationsPageInner(): React.ReactElement {
       } else {
         showToast('error', 'Sync failed', result.message ?? undefined);
       }
-      await fetchSyncLog();
+      await Promise.all([fetchSyncLog(), fetchHubspotLastSync()]);
     } catch {
       showToast('error', 'Sync failed', 'Could not run HubSpot activities sync.');
-      await fetchSyncLog();
+      await Promise.all([fetchSyncLog(), fetchHubspotLastSync()]);
     } finally {
       setHubspotSyncLoading(false);
     }
@@ -726,7 +741,11 @@ function IntegrationsPageInner(): React.ReactElement {
                         ? gmailStatus.last_connected_at
                           ? `Last connected: ${formatTimestamp(gmailStatus.last_connected_at)}`
                           : 'Last connected: —'
-                        : `Last sync: ${formatTimestamp(int.lastSync)}`}
+                        : hubspotLastSyncLoading
+                          ? 'Last sync: —'
+                          : hubspotLastSync
+                            ? `Last sync: ${formatTimestamp(hubspotLastSync)}`
+                            : 'Last sync: —'}
                     </p>
                   </CardContent>
                 </Card>
