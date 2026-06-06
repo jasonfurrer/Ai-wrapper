@@ -5,6 +5,7 @@
 
 import { supabase } from '@/lib/supabase.js';
 import { ApiClientError, buildApiUrl } from './client';
+import type { JobStartedResponse, JobStatusResponse } from './types';
 import type {
   ActivityListResponse,
   ActivityQueryParams,
@@ -251,41 +252,41 @@ export async function getCommunicationSummary(
 
 /**
  * POST /api/v1/activities/process-draft
- * Run LLM processing on draft notes when there is no activity id (e.g. new activity).
- * Same response shape as process-notes.
+ * Starts background LLM processing; returns a job_id to poll.
  */
 export async function processDraft(
   data: ProcessDraftRequest
-): Promise<ProcessNotesResponse> {
+): Promise<JobStartedResponse> {
   try {
-    return fetchApi<ProcessNotesResponse>(
+    return fetchApi<JobStartedResponse>(
       '/api/v1/activities/process-draft',
       {
         method: 'POST',
         body: JSON.stringify({
           note_text: data.note_text,
           previous_notes: data.previous_notes ?? '',
+          contact_name: data.contact_name ?? '',
         }),
       }
     );
   } catch (err) {
     if (err instanceof ApiClientError) throw err;
     throw new Error(
-      err instanceof Error ? err.message : 'Failed to process draft'
+      err instanceof Error ? err.message : 'Failed to start processing'
     );
   }
 }
 
 /**
  * POST /api/v1/activities/{activityId}/process-notes
- * Run LLM processing on notes; returns summary, recognised date, recommended date, metadata, drafts.
+ * Starts background LLM processing; returns a job_id to poll.
  */
 export async function processActivityNotes(
   activityId: string,
   data: ProcessNotesRequest
-): Promise<ProcessNotesResponse> {
+): Promise<JobStartedResponse> {
   try {
-    return fetchApi<ProcessNotesResponse>(
+    return fetchApi<JobStartedResponse>(
       `/api/v1/activities/${encodeURIComponent(activityId)}/process-notes`,
       {
         method: 'POST',
@@ -295,7 +296,26 @@ export async function processActivityNotes(
   } catch (err) {
     if (err instanceof ApiClientError) throw err;
     throw new Error(
-      err instanceof Error ? err.message : 'Failed to process notes'
+      err instanceof Error ? err.message : 'Failed to start processing'
+    );
+  }
+}
+
+/**
+ * GET /api/v1/activities/jobs/{jobId}
+ * Poll a background LLM processing job. Returns pending / complete (with result) / error.
+ */
+export async function getProcessingJobStatus(
+  jobId: string
+): Promise<JobStatusResponse> {
+  try {
+    return fetchApi<JobStatusResponse>(
+      `/api/v1/activities/jobs/${encodeURIComponent(jobId)}`
+    );
+  } catch (err) {
+    if (err instanceof ApiClientError) throw err;
+    throw new Error(
+      err instanceof Error ? err.message : 'Failed to poll job status'
     );
   }
 }

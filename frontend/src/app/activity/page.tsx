@@ -63,6 +63,7 @@ import {
   processActivityNotes,
   processDraft,
   generateEmailDrafts,
+  getProcessingJobStatus,
   createAndSubmitActivity,
   submitActivity,
   getContactsByCompany,
@@ -71,6 +72,7 @@ import {
   completeActivity,
   ApiClientError,
 } from '@/lib/api';
+import type { ProcessNotesResponse } from '@/lib/api';
 import type { CommunicationSummaryResponse } from '@/lib/api/types';
 import type { Contact } from '@/lib/api/types';
 import type { CompanySearchResult } from '@/lib/api/companies';
@@ -1339,14 +1341,44 @@ function ActivityPageContent(): React.ReactElement {
     });
   }, [accountOptions]);
 
+  const processingCancelledRef = React.useRef(false);
+
+  // Cancel any in-flight processing poll when the component unmounts.
+  React.useEffect(() => {
+    return () => { processingCancelledRef.current = true; };
+  }, []);
+
+  const applyProcessingResult = React.useCallback((res: ProcessNotesResponse) => {
+    setProcessingStep('ready');
+    setSummaryDraft(res.summary);
+    setRecognisedDate({
+      date: res.recognised_date.date,
+      label: res.recognised_date.label,
+      confidence: res.recognised_date.confidence,
+    });
+    setRecommendedTouch(res.recommended_touch_date ?? null);
+    setSubject(res.metadata.subject);
+    setQuestionsRaised(res.metadata.questions_raised);
+    setUrgency(res.metadata.urgency);
+    setSubjectConfidence(res.metadata.subject_confidence);
+    setQuestionsConfidence(res.metadata.questions_confidence);
+    const draftMap: Record<string, { text: string; confidence: number }> = {};
+    const userDraft = draftSentForProcessingRef.current;
+    draftMap.original = { text: userDraft, confidence: 100 };
+    Object.entries(res.drafts ?? {}).forEach(([k, v]) => {
+      if (k !== 'original') draftMap[k] = { text: v.text, confidence: v.confidence };
+    });
+    setDrafts(draftMap);
+  }, []);
+
   const handleSendForProcessing = async () => {
     if (!noteContent.trim()) return;
     draftSentForProcessingRef.current = noteContent;
+    processingCancelledRef.current = false;
     setProcessConfirmOpen(false);
     setProcessingError(null);
     setProcessingStep('sent');
     setProcessingStep('extracting');
-    // Clear Date, Extracted Metadata, and AI-Generated Notes sections so they show blank + spinner until backend responds
     setDueDate('');
     setRecognisedDate({ date: null, label: null, confidence: 0 });
     setRecommendedTouch(null);
@@ -1361,29 +1393,34 @@ function ActivityPageContent(): React.ReactElement {
       .join(' ')
       .trim();
     try {
-      const res = activityId
+      const { job_id } = activityId
         ? await processActivityNotes(activityId, { note_text: noteContent, contact_name: contactFullName })
         : await processDraft({ note_text: noteContent, previous_notes: previousNotesForSubmit || '', contact_name: contactFullName });
-      setProcessingStep('ready');
-      setSummaryDraft(res.summary);
-      setRecognisedDate({
-        date: res.recognised_date.date,
-        label: res.recognised_date.label,
-        confidence: res.recognised_date.confidence,
-      });
-      setRecommendedTouch(res.recommended_touch_date ?? null);
-      setSubject(res.metadata.subject);
-      setQuestionsRaised(res.metadata.questions_raised);
-      setUrgency(res.metadata.urgency);
-      setSubjectConfidence(res.metadata.subject_confidence);
-      setQuestionsConfidence(res.metadata.questions_confidence);
-      const draftMap: Record<string, { text: string; confidence: number }> = {};
-      const userDraft = draftSentForProcessingRef.current;
-      draftMap.original = { text: userDraft, confidence: 100 };
-      Object.entries(res.drafts ?? {}).forEach(([k, v]) => {
-        if (k !== 'original') draftMap[k] = { text: v.text, confidence: v.confidence };
-      });
-      setDrafts(draftMap);
+
+      // Poll until the background job finishes (2 s interval, 5 min timeout).
+      const POLL_MS = 2000;
+      const TIMEOUT_MS = 300_000;
+      const deadline = Date.now() + TIMEOUT_MS;
+
+      while (!processingCancelledRef.current) {
+        await new Promise<void>(r => setTimeout(r, POLL_MS));
+        if (processingCancelledRef.current) break;
+
+        if (Date.now() > deadline) {
+          throw new Error('Processing timed out. Please try again.');
+        }
+
+        const jobStatus = await getProcessingJobStatus(job_id);
+
+        if (jobStatus.status === 'complete' && jobStatus.result) {
+          applyProcessingResult(jobStatus.result);
+          return;
+        }
+        if (jobStatus.status === 'error') {
+          throw new Error(jobStatus.error || 'Processing failed. Please try again.');
+        }
+        // status === 'pending' → continue polling
+      }
     } catch (e) {
       let msg = 'Processing failed. Please try again.';
       if (e instanceof ApiClientError) {

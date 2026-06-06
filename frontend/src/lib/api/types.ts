@@ -220,6 +220,16 @@ export interface ProcessNotesResponse {
   drafts: Record<string, DraftOut>;
 }
 
+export interface JobStartedResponse {
+  job_id: string;
+}
+
+export interface JobStatusResponse {
+  status: 'pending' | 'complete' | 'error';
+  result?: ProcessNotesResponse;
+  error?: string;
+}
+
 export interface ActivitySubmitRequest {
   mark_complete?: boolean;
   meeting_notes?: string | null;

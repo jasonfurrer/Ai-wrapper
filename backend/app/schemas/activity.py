@@ -158,6 +158,18 @@ class ProcessNotesResponse(BaseModel):
     drafts: dict[str, DraftOut] = {}  # keys: original, formal, concise, warm, detailed
 
 
+class JobStartedResponse(BaseModel):
+    """Returned immediately when an async processing job is accepted."""
+    job_id: str
+
+
+class JobStatusResponse(BaseModel):
+    """Polling response for a background processing job."""
+    status: str  # "pending" | "complete" | "error"
+    result: ProcessNotesResponse | None = None
+    error: str | None = None
+
+
 class GenerateEmailDraftsRequest(BaseModel):
     """Request body for POST /activities/generate-email-drafts (Smart compose)."""
     email_instructions: str = ""

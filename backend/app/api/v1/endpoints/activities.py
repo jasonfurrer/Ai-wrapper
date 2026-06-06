@@ -28,6 +28,8 @@ from app.schemas.activity import (
     ExtractedMetadataOut,
     GenerateEmailDraftsRequest,
     GenerateEmailDraftsResponse,
+    JobStartedResponse,
+    JobStatusResponse,
     ProcessDraftRequest,
     ProcessNotesRequest,
     ProcessNotesResponse,
@@ -38,6 +40,7 @@ from app.schemas.activity import (
     _hubspot_priority,
     _response_priority,
 )
+import app.services.job_store as job_store
 from app.schemas.common import MessageResponse
 from app.services.claude_agents import (
     extract_metadata,
@@ -1171,110 +1174,23 @@ async def complete_activity(
 
 @router.post(
     "/process-draft",
-    response_model=ProcessNotesResponse,
+    response_model=JobStartedResponse,
+    status_code=202,
     summary="Process draft notes (no activity id)",
-    description="Same as process-notes but accepts note_text and previous_notes in body. Use when creating a new activity.",
+    description="Starts async LLM processing; returns a job_id to poll via GET /jobs/{job_id}.",
 )
 async def process_draft(
     body: ProcessDraftRequest,
     user_id: str = Depends(get_current_user_id),
     supabase: SupabaseService = Depends(get_supabase_service),
-) -> ProcessNotesResponse:
-    """POST /api/v1/activities/process-draft — LLM processing without an existing activity (e.g. new activity)."""
-    try:
-        note_text = (body.note_text or "").strip()
-        previous_notes = (body.previous_notes or "").strip()
-        contact_name = (body.contact_name or "").strip()
-        full_notes = (previous_notes + "\n\n" + note_text).strip() if previous_notes else note_text
-
-        # Run all five LLM calls concurrently — each is independent of the others.
-        comm_result, recognised, recommended, metadata, drafts_map = await asyncio.gather(
-            asyncio.to_thread(generate_communication_summary, full_notes),
-            asyncio.to_thread(extract_recognised_date, note_text, previous_notes),
-            asyncio.to_thread(recommend_touch_date, note_text, previous_notes),
-            asyncio.to_thread(extract_metadata, note_text, previous_notes, contact_name),
-            asyncio.to_thread(generate_drafts, note_text, previous_notes),
-        )
-
-        summary = comm_result.get("summary") or ""
-
-        # Write all operation logs concurrently.
-        await asyncio.gather(
-            supabase.insert_operation_log(
-                user_id=user_id, entity_type="llm_call", operation="generate_summary",
-                log_status="error" if comm_result.get("_llm_error") else "success",
-                error_message=comm_result.get("_llm_error"),
-                response_summary=None if comm_result.get("_llm_error") else f"Generated summary ({len(summary)} chars)",
-                duration_ms=comm_result.get("_llm_duration_ms", 0),
-                metadata={"notes_len": len(full_notes), "skipped": bool(comm_result.get("_llm_skipped"))},
-            ),
-            supabase.insert_operation_log(
-                user_id=user_id, entity_type="llm_call", operation="extract_date",
-                log_status="error" if recognised.get("_llm_error") else "success",
-                error_message=recognised.get("_llm_error"),
-                response_summary=None if recognised.get("_llm_error") else (f"Extracted date: {recognised.get('date')}" if recognised.get("date") else "No date found"),
-                duration_ms=recognised.get("_llm_duration_ms", 0),
-            ),
-            supabase.insert_operation_log(
-                user_id=user_id, entity_type="llm_call", operation="recommend_touch",
-                log_status="error" if recommended.get("_llm_error") else "success",
-                error_message=recommended.get("_llm_error"),
-                response_summary=None if recommended.get("_llm_error") else f"Recommended date: {recommended.get('date')}",
-                duration_ms=recommended.get("_llm_duration_ms", 0),
-            ),
-            supabase.insert_operation_log(
-                user_id=user_id, entity_type="llm_call", operation="extract_metadata",
-                log_status="error" if metadata.get("_llm_error") else "success",
-                error_message=metadata.get("_llm_error"),
-                response_summary=None if metadata.get("_llm_error") else f"Subject: {metadata.get('subject', '')}",
-                duration_ms=metadata.get("_llm_duration_ms", 0),
-            ),
-            supabase.insert_operation_log(
-                user_id=user_id, entity_type="llm_call", operation="generate_drafts",
-                log_status="error" if drafts_map.get("_llm_error") else "success",
-                error_message=drafts_map.get("_llm_error"),
-                response_summary=None if drafts_map.get("_llm_error") else "Generated note drafts (formal, concise, detailed)",
-                duration_ms=drafts_map.get("_llm_duration_ms", 0),
-            ),
-        )
-
-        drafts_out: dict[str, DraftOut] = {
-            k: DraftOut(text=v["text"], confidence=v["confidence"])
-            for k, v in drafts_map.items()
-            if isinstance(v, dict) and "text" in v
-        }
-
-        return ProcessNotesResponse(
-            summary=summary,
-            recognised_date=RecognisedDateOut(
-                date=recognised.get("date"),
-                label=recognised.get("label"),
-                confidence=recognised.get("confidence", 0),
-            ),
-            recommended_touch_date=RecommendedTouchDateOut(
-                date=recommended["date"],
-                label=recommended.get("label", ""),
-                rationale=recommended.get("rationale", ""),
-            ),
-            metadata=ExtractedMetadataOut(
-                subject=metadata["subject"],
-                questions_raised=metadata["questions_raised"],
-                urgency=metadata["urgency"],
-                subject_confidence=metadata["subject_confidence"],
-                questions_confidence=metadata["questions_confidence"],
-            ),
-            drafts=drafts_out,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Process draft error: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process draft",
-        )
+) -> JobStartedResponse:
+    """POST /api/v1/activities/process-draft — kick off background LLM processing, return job_id immediately."""
+    note_text = (body.note_text or "").strip()
+    previous_notes = (body.previous_notes or "").strip()
+    contact_name = (body.contact_name or "").strip()
+    jid = job_store.create_job()
+    asyncio.create_task(_run_llm_processing(jid, note_text, previous_notes, contact_name, user_id, None, supabase))
+    return JobStartedResponse(job_id=jid)
 
 
 @router.post(
@@ -1345,11 +1261,33 @@ async def generate_smart_compose_drafts(
         )
 
 
+@router.get(
+    "/jobs/{job_id}",
+    response_model=JobStatusResponse,
+    summary="Poll background processing job",
+    description="Returns pending/complete/error. Poll every 2 s until status != pending.",
+)
+async def get_processing_job(
+    job_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> JobStatusResponse:
+    """GET /api/v1/activities/jobs/{job_id} — lightweight poll endpoint for LLM background jobs."""
+    entry = job_store.get_job(job_id)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found or expired")
+    if entry["status"] == "complete":
+        return JobStatusResponse(status="complete", result=entry["result"])
+    if entry["status"] == "error":
+        return JobStatusResponse(status="error", error=entry["error"])
+    return JobStatusResponse(status="pending")
+
+
 @router.post(
     "/{activity_id}/process-notes",
-    response_model=ProcessNotesResponse,
+    response_model=JobStartedResponse,
+    status_code=202,
     summary="Process notes with LLM",
-    description="Run Claude agents: summary, recognised date, recommended touch date, metadata, drafts.",
+    description="Starts async LLM processing; returns a job_id to poll via GET /jobs/{job_id}.",
 )
 async def process_notes(
     activity_id: str,
@@ -1357,44 +1295,55 @@ async def process_notes(
     user_id: str = Depends(get_current_user_id),
     supabase: SupabaseService = Depends(get_supabase_service),
     hubspot: HubSpotService = Depends(get_hubspot_service),
-) -> ProcessNotesResponse:
-    """POST /api/v1/activities/{activity_id}/process-notes — full LLM processing for activity page."""
+) -> JobStartedResponse:
+    """POST /api/v1/activities/{activity_id}/process-notes — kick off background LLM processing, return job_id immediately."""
+    # Fetch existing body synchronously here (fast cache/HubSpot call) before handing off to background.
+    cached = await supabase.get_tasks_cache(user_id)
+    existing_body = ""
+    for row in cached:
+        if (row.get("hubspot_task_id") or row.get("data", {}).get("id")) == activity_id:
+            data = row.get("data") or {}
+            props = data.get("properties") or {}
+            existing_body = (props.get(HS_BODY) or "").strip()
+            break
+    if not existing_body:
+        try:
+            task = hubspot.get_task(activity_id)
+            props = task.get("properties") or {}
+            existing_body = (props.get(HS_BODY) or "").strip()
+        except HubSpotServiceError:
+            pass
+
+    note_text = (body.note_text or "").strip()
+    contact_name = (body.contact_name or "").strip()
+    jid = job_store.create_job()
+    asyncio.create_task(_run_llm_processing(jid, note_text, existing_body, contact_name, user_id, activity_id, supabase))
+    return JobStartedResponse(job_id=jid)
+
+
+async def _run_llm_processing(
+    job_id: str,
+    note_text: str,
+    previous_notes: str,
+    contact_name: str,
+    user_id: str,
+    activity_id: str | None,
+    supabase: SupabaseService,
+) -> None:
+    """Background coroutine: run all five LLM agents and store the result in the job store."""
     try:
-        # Load existing activity body (previous notes) for context
-        cached = await supabase.get_tasks_cache(user_id)
-        existing_body = ""
-        for row in cached:
-            if (row.get("hubspot_task_id") or row.get("data", {}).get("id")) == activity_id:
-                data = row.get("data") or {}
-                props = data.get("properties") or {}
-                existing_body = (props.get(HS_BODY) or "").strip()
-                break
-        if not existing_body:
-            try:
-                task = hubspot.get_task(activity_id)
-                props = task.get("properties") or {}
-                existing_body = (props.get(HS_BODY) or "").strip()
-            except HubSpotServiceError:
-                pass
+        full_notes = (previous_notes + "\n\n" + note_text).strip() if previous_notes else note_text
 
-        note_text = (body.note_text or "").strip()
-        contact_name = (body.contact_name or "").strip()
-        full_notes = (existing_body + "\n\n" + note_text).strip() if existing_body else note_text
-
-        # Run all five LLM calls concurrently — each is independent of the others.
-        # asyncio.to_thread() offloads the synchronous Anthropic SDK calls to the thread
-        # pool so the event loop is not blocked and all five run in parallel.
         comm_result, recognised, recommended, metadata, drafts_map = await asyncio.gather(
             asyncio.to_thread(generate_communication_summary, full_notes),
-            asyncio.to_thread(extract_recognised_date, note_text, existing_body),
-            asyncio.to_thread(recommend_touch_date, note_text, existing_body),
-            asyncio.to_thread(extract_metadata, note_text, existing_body, contact_name),
-            asyncio.to_thread(generate_drafts, note_text, existing_body),
+            asyncio.to_thread(extract_recognised_date, note_text, previous_notes),
+            asyncio.to_thread(recommend_touch_date, note_text, previous_notes),
+            asyncio.to_thread(extract_metadata, note_text, previous_notes, contact_name),
+            asyncio.to_thread(generate_drafts, note_text, previous_notes),
         )
 
         summary = comm_result.get("summary") or ""
 
-        # Write all operation logs concurrently — results are available, order doesn't matter.
         await asyncio.gather(
             supabase.insert_operation_log(
                 user_id=user_id, entity_type="llm_call", operation="generate_summary",
@@ -1445,7 +1394,7 @@ async def process_notes(
             if isinstance(v, dict) and "text" in v
         }
 
-        return ProcessNotesResponse(
+        result = ProcessNotesResponse(
             summary=summary,
             recognised_date=RecognisedDateOut(
                 date=recognised.get("date"),
@@ -1466,16 +1415,10 @@ async def process_notes(
             ),
             drafts=drafts_out,
         )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except HTTPException:
-        raise
+        job_store.complete_job(job_id, result)
     except Exception as e:
-        logger.exception("Process notes error: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process notes",
-        )
+        logger.exception("Background LLM processing error job_id=%s: %s", job_id, e)
+        job_store.fail_job(job_id, "Processing failed. Please try again.")
 
 
 @router.post(
